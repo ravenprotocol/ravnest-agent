@@ -57,6 +57,13 @@ def create_node_and_engine():
     # Use longer timeout for CPU (inference is slow)
     timeout_minutes = 30 if use_cpu else 10
 
+    # Parse proportions from env (e.g. "0.3,0.7")
+    proportions = None
+    prop_str = os.environ.get("RAVNEST_PROPORTIONS", "")
+    if prop_str:
+        proportions = [float(p) for p in prop_str.split(",")]
+        print(f"[node-{rank}] Using proportional split: {proportions}")
+
     print(f"[node-{rank}] Creating Node (reduce_factor=1, backend=gloo, timeout={timeout_minutes}min)...")
     node = Node(
         model=model,
@@ -69,6 +76,7 @@ def create_node_and_engine():
         cluster_length=2,
         reduce_factor=1,
         dist_timeout=timeout_minutes,
+        proportions=proportions,
     )
     node.model.eval()
 

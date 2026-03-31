@@ -67,7 +67,7 @@ def get_local_ip():
 
 
 def generate_compose(model, nodes, device, port, api_key="", master_addr="node-0",
-                     rank_offset=0, world_size=None, network_mode=None):
+                     rank_offset=0, world_size=None, network_mode=None, proportions=None):
     """Generate a docker-compose.yml string."""
     if world_size is None:
         world_size = nodes
@@ -102,6 +102,7 @@ def generate_compose(model, nodes, device, port, api_key="", master_addr="node-0
             f"      - NODE_ROLE={role}",
             f"      - RAVNEST_DEVICE={device}",
             f"      - RAVNEST_API_KEY={api_key}" if api_key and rank == 0 else None,
+            f"      - RAVNEST_PROPORTIONS={','.join(str(p) for p in proportions)}" if proportions else None,
             f"      - PYTHONUNBUFFERED=1",
         ]
         env_lines = [line for line in env_lines if line is not None]
@@ -173,6 +174,7 @@ def cmd_up(args):
     api_key = args.api_key or ""
     master_addr = args.master_addr
     world_size = args.world_size or nodes
+    proportions = [float(p) for p in args.proportions.split(",")] if args.proportions else None
 
     # Cross-machine mode: use host networking so Gloo can reach other machines
     cross_machine = master_addr is not None
@@ -198,6 +200,8 @@ def cmd_up(args):
         print(f"  Mode:    single-machine")
     print(f"  API:     http://{'0.0.0.0' if cross_machine else 'localhost'}:{port}")
     print(f"  Auth:    {'enabled' if api_key else 'disabled'}")
+    if proportions:
+        print(f"  Split:   {proportions}")
     print()
 
     if cross_machine:
@@ -215,6 +219,7 @@ def cmd_up(args):
         master_addr=master_addr,
         world_size=world_size,
         network_mode=network_mode,
+        proportions=proportions,
     )
     compose_path = os.path.join(deploy_dir, "docker-compose.generated.yml")
 
@@ -250,6 +255,7 @@ def cmd_join(args):
     master_addr = args.master_addr
     rank = args.rank
     world_size = args.world_size
+    proportions = [float(p) for p in args.proportions.split(",")] if args.proportions else None
     local_ip = get_local_ip()
 
     print(f"Ravnest Distributed Inference — Joining Cluster")
@@ -278,6 +284,7 @@ def cmd_join(args):
         rank_offset=rank,
         world_size=world_size,
         network_mode="host",
+        proportions=proportions,
     )
     compose_path = os.path.join(deploy_dir, "docker-compose.generated.yml")
 
@@ -355,6 +362,8 @@ def main():
                           help="IP address for cross-machine mode (enables host networking)")
     up_parser.add_argument("--world-size", "-w", type=int, default=None,
                           help="Total nodes across all machines (cross-machine only, default: same as --nodes)")
+    up_parser.add_argument("--proportions", type=str, default=None,
+                          help="Layer split proportions per node, e.g. '0.3,0.7' (default: equal split)")
 
     # ravnest join
     join_parser = subparsers.add_parser("join", help="Join an existing cluster from another machine")
@@ -369,6 +378,8 @@ def main():
     join_parser.add_argument("--device", "-d", type=str, default=None,
                             choices=["cpu", "cuda"],
                             help="Device type (default: auto-detect)")
+    join_parser.add_argument("--proportions", type=str, default=None,
+                            help="Layer split proportions per node, e.g. '0.3,0.7' (must match root)")
 
     # ravnest down / status
     subparsers.add_parser("down", help="Stop distributed inference")

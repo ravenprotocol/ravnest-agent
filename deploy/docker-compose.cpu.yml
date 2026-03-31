@@ -14,6 +14,7 @@ services:
       - NODE_ROLE=root
       - RAVNEST_DEVICE=cpu
       - RAVNEST_API_KEY=${RAVNEST_API_KEY:-}
+      - RAVNEST_PROPORTIONS=${RAVNEST_PROPORTIONS:-}
       - PYTHONUNBUFFERED=1
     volumes:
       - model_cache:/app/model_cache
@@ -33,6 +34,7 @@ services:
       - MODEL_NAME=TinyLlama/TinyLlama-1.1B-Chat-v1.0
       - NODE_ROLE=leaf
       - RAVNEST_DEVICE=cpu
+      - RAVNEST_PROPORTIONS=${RAVNEST_PROPORTIONS:-}
       - PYTHONUNBUFFERED=1
     volumes:
       - model_cache:/app/model_cache

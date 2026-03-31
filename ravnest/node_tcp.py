@@ -60,9 +60,10 @@ class Node():
 
     def __init__(self, model=None, optimizer=None, optimizer_params={}, update_frequency = 1, batch_size=None, seq_length=None, cluster_length=None,
                  dist_timeout=10, reduce_factor=None, labels=None, device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'), dtype='float16',
-                 mode=NodeModes.TRAIN, loss_filename='losses.txt', recompute=False, backend = 'grpc', compression=False, average_optim=False, **kwargs):
-        
+                 mode=NodeModes.TRAIN, loss_filename='losses.txt', recompute=False, backend = 'grpc', compression=False, average_optim=False, proportions=None, **kwargs):
+
         self.backend = backend
+        self.proportions = proportions
         self.loss_filename = loss_filename
 
         self.reset()
@@ -167,7 +168,7 @@ class Node():
     def configure_model(self):
         split_spec_class = get_split_spec(self.model)
         print('Split Spec Class: ', split_spec_class)
-        split_spec = split_spec_class(stage=self.comm_session.rank, node_type=self.node_type, model=self.model, num_stages=self.comm_session.world_size)
+        split_spec = split_spec_class(stage=self.comm_session.rank, node_type=self.node_type, model=self.model, num_stages=self.comm_session.world_size, proportions=self.proportions)
         split_spec.configure_stage_model()
         self.model.to(self.dtype)
         self.model.to(self.device)
