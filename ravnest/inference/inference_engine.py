@@ -211,6 +211,80 @@ class InferenceEngine():
 
         return input_ids #tokenizer_decode_batch(input_ids, self.tokenizer)
 
+    @torch.inference_mode()
+    def _generate_stream(self, input_ids=None, max_seq_lengths=None, top_k=1, temperature=1.0, context_lengths=None, **kwargs):
+        """Like _generate but yields each new token as it's produced (ROOT only)."""
+
+        bs, mbs_list, seq_length, max_seq_length_in_batch, max_seq_lengths = self.configure_pipelining(input_ids, max_seq_lengths)
+        num_generated_tokens = 0
+        is_generation_done = torch.tensor([False]*bs).to(self.node.device)
+        pad_token_tensor = torch.tensor([self.tokenizer.pad_token_id]*bs).to(self.node.device)
+        while num_generated_tokens < max_seq_length_in_batch:
+            self.comm_session.forward_input_shapes[0][1] = seq_length
+
+            if self.use_prefill and num_generated_tokens == 0:
+                prefill = True
+            else:
+                prefill = False
+                self.kv_cache_engine.allocate_block_tables_for_new_tokens(input_ids, context_lengths)
+
+            output_logits = self.batch_forward(bs=bs,
+                                              mbs_list=mbs_list,
+                                              input_ids=input_ids,
+                                              prefill=prefill,
+                                              k_caches=self.k_caches,
+                                              v_caches=self.v_caches,
+                                              block_tables=self.kv_cache_engine.get_block_tables(bs),
+                                              context_lengths=context_lengths,
+                                              **kwargs)
+
+            if self.node_type == NodeTypes.LEAF:
+                last_token_logits = output_logits[:, -1, :]
+                next_token_ids = sample_token_from_logits(last_token_logits, top_k, temperature)
+                self.comm_session.trigger_feedback_send(next_token_ids)
+            else:
+                self.comm_session.start_feedback_recv()
+                feedback_wait_start = time.time()
+                while not self.comm_session.feedback_recv_work_done():
+                    if time.time() - feedback_wait_start > 30:
+                        raise RuntimeError("feedback_recv timed out after 30s — node-1 may have crashed")
+                    time.sleep(0.001)
+                next_token_ids = self.comm_session.feedback_ip
+
+            seq_length += 1
+            context_lengths += 1
+            num_generated_tokens += 1
+            next_token_ids = torch.where(is_generation_done, pad_token_tensor, next_token_ids)
+            input_ids = torch.cat((input_ids, next_token_ids[:,None]), dim=-1)
+
+            if kwargs.get('attention_mask', None) is not None:
+                new_token_mask = kwargs['attention_mask'].new_ones((bs,1))
+                kwargs['attention_mask'] = torch.cat((kwargs['attention_mask'], new_token_mask), axis=-1)
+
+            # Yield the decoded token for each sequence in the batch
+            if self.node_type != NodeTypes.LEAF:
+                token_text = self.tokenizer.decode(next_token_ids[0].item(), skip_special_tokens=True)
+                yield token_text
+
+            is_generation_done = self.is_generation_complete(is_generation_done, next_token_ids, num_generated_tokens, max_seq_lengths)
+
+            if torch.all(is_generation_done):
+                break
+
+    def generate_stream(self, prompt_list=None, max_seq_lengths=None, top_k=1, temperature=1.0):
+        """Streaming generate: yields token strings one at a time."""
+        self.reset_kv_cache()
+        prompt_list = self.broadcast_prompt_list(prompt_list)
+        tokenized_and_padded_batch, unpadded_seq_lengths = self.tokenize_and_pad_batch(prompt_list)
+        if self.use_prefill:
+            self.kv_cache_engine.allocate_block_tables_for_batch(tokenized_and_padded_batch['input_ids'], unpadded_seq_lengths)
+            self.k_caches, self.v_caches = self.kv_cache_engine.get_kv_caches()
+
+        yield from self._generate_stream(**tokenized_and_padded_batch,
+                                        max_seq_lengths=max_seq_lengths,
+                                        top_k=top_k, temperature=temperature,
+                                        context_lengths=unpadded_seq_lengths)
+
     def reset_kv_cache(self):
         """Free all allocated KV cache blocks between requests."""
         if hasattr(self, 'kv_cache_engine') and self.kv_cache_engine is not None:
