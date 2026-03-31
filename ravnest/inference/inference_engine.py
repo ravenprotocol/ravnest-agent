@@ -10,7 +10,7 @@ MAX_NUM_TOKENS = 3000
 
 class InferenceEngine():
 
-    def __init__(self, node, tokenizer, track_mem_usage=True, use_kv_cache=True):
+    def __init__(self, node, tokenizer, track_mem_usage=True, use_kv_cache=True, block_size=4, max_batch_size=4):
         self.node = node
         self.tokenizer = tokenizer
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
@@ -18,18 +18,18 @@ class InferenceEngine():
         self.comm_session = self.node.comm_session
         self.is_pipelining = False
         self.track_mem_usage = track_mem_usage
-        
+
         self.cache_manager = None
         self.k_caches = None
         self.v_caches = None
         if use_kv_cache:
             self.use_prefill = True
-            self.kv_cache_engine = PagedAttentionEngine(device=self.node.device, 
-                                              dtype=self.comm_session.dtype, 
+            self.kv_cache_engine = PagedAttentionEngine(device=self.node.device,
+                                              dtype=self.comm_session.dtype,
                                               num_shard_layers = self.node.layer_end_idx - self.node.layer_start_idx,
                                               model_config=self.node.model.config,
-                                              max_batch_size=4, max_seq_length_during_gen=MAX_NUM_TOKENS,
-                                              block_size=4
+                                              max_batch_size=max_batch_size, max_seq_length_during_gen=MAX_NUM_TOKENS,
+                                              block_size=block_size
                                             )
 
         if self.track_mem_usage:
