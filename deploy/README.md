@@ -198,8 +198,141 @@ ravnest join --master-addr 192.168.1.100 --rank 2 --world-size 3
 ```
 
 Cross-machine mode uses `network_mode: host` so containers share the host's network.
-All machines must be on the same LAN and able to reach each other on port 29500 (Gloo)
+Machines must be able to reach each other on port 29500 (Gloo), port 29400 (auto-profile),
 and port 8000 (API, root only).
+
+## Networking Guide
+
+Machines need to reach each other directly. Here's how depending on your setup:
+
+### Same LAN (home/office)
+
+Already works. Use your local IP (`ifconfig` or `ip addr`).
+
+### Different networks — Tailscale (easiest, free for up to 3 users)
+
+[Tailscale](https://tailscale.com) is a mesh VPN. One command to install, zero config.
+Every machine gets a stable IP (100.x.y.z) and can reach every other machine directly.
+
+```bash
+# On every machine (Linux)
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+
+# Check your Tailscale IP
+tailscale ip -4
+# Example: 100.64.0.1
+
+# Machine 1
+ravnest up --master-addr 100.64.0.1 --world-size 2
+
+# Machine 2
+ravnest join --master-addr 100.64.0.1 --world-size 2
+```
+
+Good for: first tests, small teams (up to 3 users free).
+
+### Different networks — Nebula (free, unlimited users, self-hosted)
+
+[Nebula](https://github.com/slackhq/nebula) is an open-source mesh VPN built by Slack.
+You run a "lighthouse" server that helps machines find each other, then traffic flows
+directly between machines. No user limits, no cost.
+
+**1. Set up a lighthouse** (one-time, any cheap VPS):
+
+```bash
+# Download Nebula
+curl -fsSL https://github.com/slackhq/nebula/releases/latest/download/nebula-linux-amd64.tar.gz | tar xz
+
+# Create a certificate authority
+./nebula-cert ca -name "ravnest-cluster"
+
+# Create lighthouse certificate
+./nebula-cert sign -name lighthouse -ip 10.42.0.1/24
+
+# Create config (lighthouse.yml):
+# pki:
+#   ca: /etc/nebula/ca.crt
+#   cert: /etc/nebula/lighthouse.crt
+#   key: /etc/nebula/lighthouse.key
+# lighthouse:
+#   am_lighthouse: true
+# listen:
+#   host: 0.0.0.0
+#   port: 4242
+# firewall:
+#   inbound:
+#     - port: any
+#       proto: any
+#       host: any
+#   outbound:
+#     - port: any
+#       proto: any
+#       host: any
+
+./nebula -config lighthouse.yml
+```
+
+**2. For each community member:**
+
+```bash
+# On the lighthouse, generate a cert for each member:
+./nebula-cert sign -name "alice" -ip 10.42.0.2/24
+./nebula-cert sign -name "bob" -ip 10.42.0.3/24
+# Send them: ca.crt + their .crt + .key files
+
+# On each member's machine:
+curl -fsSL https://github.com/slackhq/nebula/releases/latest/download/nebula-linux-amd64.tar.gz | tar xz
+
+# config.yml:
+# pki:
+#   ca: /etc/nebula/ca.crt
+#   cert: /etc/nebula/alice.crt
+#   key: /etc/nebula/alice.key
+# static_host_map:
+#   "10.42.0.1": ["<lighthouse-public-ip>:4242"]
+# lighthouse:
+#   hosts:
+#     - 10.42.0.1
+# listen:
+#   host: 0.0.0.0
+#   port: 4242
+# firewall:
+#   inbound:
+#     - port: any
+#       proto: any
+#       host: any
+#   outbound:
+#     - port: any
+#       proto: any
+#       host: any
+
+sudo ./nebula -config config.yml
+```
+
+**3. Run Ravnest:**
+
+```bash
+# Alice (root, 10.42.0.2)
+ravnest up --master-addr 10.42.0.2 --world-size 3
+
+# Bob (10.42.0.3)
+ravnest join --master-addr 10.42.0.2 --world-size 3 --rank 1
+
+# Carol (10.42.0.4)
+ravnest join --master-addr 10.42.0.2 --world-size 3 --rank 2
+```
+
+Good for: communities of 10-100+ people, no cost, full control.
+
+### Which to use?
+
+| | Tailscale | Nebula |
+|---|-----------|--------|
+| Setup | 1 command | 30 min (lighthouse + certs) |
+| Cost | Free up to 3 users | Free, unlimited |
+| Server needed | No | Yes (tiny VPS) |
+| Best for | First tests, small teams | Communities, long-term |
 
 ## Current Limitations
 
