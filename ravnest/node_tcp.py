@@ -512,7 +512,10 @@ class Node():
     def create_intermediate_input_args(self, received_inputs=None, **dataloader_kwargs):
         input_kwargs = {}
         for k,v in dataloader_kwargs.items():
-            input_kwargs[k] = v.to(self.device)
+            if isinstance(v, torch.Tensor):
+                input_kwargs[k] = v.to(self.device)
+            else:
+                input_kwargs[k] = v
         input_kwargs['hidden_states'] = received_inputs
         return input_kwargs
     

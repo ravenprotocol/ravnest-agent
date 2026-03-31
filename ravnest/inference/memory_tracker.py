@@ -14,7 +14,9 @@ class MemoryTracker():
             }
 
     def get_gpu_usage(self):
-        total_memory = torch.cuda.get_device_properties(self.device).total_memory            
+        if not torch.cuda.is_available() or self.device.type == 'cpu':
+            return 0.0
+        total_memory = torch.cuda.get_device_properties(self.device).total_memory
         allocated_memory = torch.cuda.memory_allocated(self.device)
         gpu_percent = round((allocated_memory / total_memory) * 100, 1)
         return gpu_percent
