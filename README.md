@@ -14,12 +14,56 @@ Ravnest introduces a novel asynchronous parallel training approach that combines
 
 ![-----------------------------------------------------](https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/aqua.png)
 
+### Features
+
+- **Distributed Training** across heterogeneous consumer-grade PCs
+- **Distributed LLM Inference** with paged attention and pipeline parallelism
+- **Supported Models**: Llama (1B, 3B, 8B), Qwen-2
+- **Docker Compose** setup for multi-node inference with OpenAI-compatible API
+- **Dual backends**: gRPC for TCP, torch.distributed (Gloo/NCCL) for GPU clusters
+- **KV Cache** with paged attention for memory-efficient inference
+
+![-----------------------------------------------------](https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/aqua.png)
+
 ### Installation
 ```bash
 pip install git+https://github.com/ravenprotocol/ravnest.git
 ```
 
-### Usage
+![-----------------------------------------------------](https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/aqua.png)
+
+### Distributed Inference (Docker)
+
+Run a Llama model split across multiple containers with an OpenAI-compatible API endpoint.
+
+**GPU setup** (requires NVIDIA Container Toolkit):
+```bash
+cd deploy
+docker compose up --build
+```
+
+**CPU setup** (for testing without GPU):
+```bash
+cd deploy
+docker compose -f docker-compose.cpu.yml up --build
+```
+
+Once running, send requests to the API:
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "ravnest",
+    "messages": [{"role": "user", "content": "Hello, how are you?"}],
+    "max_tokens": 50
+  }'
+```
+
+The API is compatible with Open WebUI, LangChain, Continue.dev, and any tool that speaks the OpenAI protocol. See [deploy/README.md](deploy/README.md) for full details.
+
+![-----------------------------------------------------](https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/aqua.png)
+
+### Distributed Training
 
 Clone the Repository:
 ```bash
