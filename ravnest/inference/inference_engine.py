@@ -134,9 +134,9 @@ class InferenceEngine():
     def broadcast_prompt_list(self, prompt_list):
         if self.node_type == NodeTypes.ROOT:
             batch_size = len(prompt_list)
-            self.comm_session.broadcast_metadata(torch.tensor(batch_size).cuda())
+            self.comm_session.broadcast_metadata(torch.tensor(batch_size).to(self.node.device))
         else:
-            batch_size = torch.tensor(0).cuda()
+            batch_size = torch.tensor(0).to(self.node.device)
             self.comm_session.broadcast_metadata(batch_size)
             print('Recieved batch size: ', batch_size)
             batch_size = int(batch_size.item())
