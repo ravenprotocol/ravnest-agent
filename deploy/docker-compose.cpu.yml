@@ -15,6 +15,7 @@ services:
       - RAVNEST_DEVICE=cpu
       - RAVNEST_API_KEY=${RAVNEST_API_KEY:-}
       - RAVNEST_PROPORTIONS=${RAVNEST_PROPORTIONS:-}
+      - RAVNEST_AUTO_PROFILE=${RAVNEST_AUTO_PROFILE:-}
       - PYTHONUNBUFFERED=1
     volumes:
       - model_cache:/app/model_cache
@@ -35,6 +36,7 @@ services:
       - NODE_ROLE=leaf
       - RAVNEST_DEVICE=cpu
       - RAVNEST_PROPORTIONS=${RAVNEST_PROPORTIONS:-}
+      - RAVNEST_AUTO_PROFILE=${RAVNEST_AUTO_PROFILE:-}
       - PYTHONUNBUFFERED=1
     volumes:
       - model_cache:/app/model_cache
