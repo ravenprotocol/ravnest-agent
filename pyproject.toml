@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "ravnest"
+version = "0.2.0"
+description = "Decentralized asynchronous training and distributed inference on heterogeneous devices"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Raven Protocol", email = "kailash@ravenprotocol.com"},
+]
+keywords = ["deep learning", "distributed computing", "decentralized training", "LLM inference", "pipeline parallelism"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "grpcio>=1.51.0",
+    "grpcio-tools>=1.51.0",
+    "numpy",
+    "protobuf>=4.24.0",
+    "scikit-learn",
+    "torch",
+    "packaging",
+    "psutil",
+    "torchinfo",
+]
+
+[project.optional-dependencies]
+inference = [
+    "fastapi",
+    "uvicorn",
+    "transformers",
+    "accelerate",
+]
+gpu = [
+    "nvidia-ml-py3",
+    "torchvision",
+]
+all = [
+    "ravnest[inference,gpu]",
+    "datasets",
+]
+
+[project.scripts]
+ravnest = "ravnest.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ravenprotocol/ravnest"
+Documentation = "https://ravnest.readthedocs.io"
+Repository = "https://github.com/ravenprotocol/ravnest"
+Paper = "https://arxiv.org/abs/2401.01728"
+
+[tool.setuptools.packages.find]
+include = ["ravnest*"]
+
+[tool.setuptools.package-data]
+ravnest = ["protos/*"]

@@ -3,7 +3,7 @@ import sys
 import re
 from pathlib import Path
 import glob
-from pkg_resources import parse_requirements
+from packaging.requirements import Requirement
 from setuptools import setup, find_packages
 from setuptools.command.install import install
 from setuptools.command.develop import develop
@@ -57,11 +57,15 @@ class CustomEggInfoCommand(egg_info):
         proto_compile(this_directory)
 
 with open("requirements.txt") as requirements_file:
-    install_requires = list(map(str, parse_requirements(requirements_file)))
+    install_requires = [
+        str(Requirement(line.strip()))
+        for line in requirements_file
+        if line.strip() and not line.strip().startswith("#")
+    ]
 
 setup(
     name="ravnest",
-    version="0.1.0",
+    version="0.2.0",
     cmdclass={"install":CustomInstallCommand, 
               "build_py":CustomBuildpyCommand,
               "develop":CustomDevelopCommand,
