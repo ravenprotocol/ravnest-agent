@@ -32,20 +32,29 @@ pip install git+https://github.com/ravenprotocol/ravnest.git
 
 ![-----------------------------------------------------](https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/aqua.png)
 
-### Distributed Inference (Docker)
+### Distributed Inference
 
 Run a Llama model split across multiple containers with an OpenAI-compatible API endpoint.
 
-**GPU setup** (requires NVIDIA Container Toolkit):
+**One command** (auto-detects GPU/CPU):
 ```bash
-cd deploy
-docker compose up --build
+ravnest up
 ```
 
-**CPU setup** (for testing without GPU):
+**With options:**
+```bash
+ravnest up --model meta-llama/Llama-3.1-8B --nodes 3 --port 8000
+ravnest up --device cpu --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
+ravnest status
+ravnest down
+```
+
+**Or use Docker Compose directly:**
+
 ```bash
 cd deploy
-docker compose -f docker-compose.cpu.yml up --build
+docker compose up --build                                    # GPU
+docker compose -f docker-compose.cpu.yml up --build          # CPU
 ```
 
 Once running, send requests to the API:
