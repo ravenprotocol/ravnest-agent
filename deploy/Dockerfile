@@ -9,8 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy requirements and install Python deps
 COPY requirements.txt .
-# torchpippy may not be on PyPI anymore; skip it for inference
-RUN pip install --no-cache-dir $(grep -v torchpippy requirements.txt) \
+RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir fastapi uvicorn transformers accelerate
 
 # Copy the project

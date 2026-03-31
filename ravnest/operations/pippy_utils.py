@@ -1,5 +1,8 @@
 import torch.fx as fx
-from pippy.ModelSplit import *
+try:
+    from pippy.ModelSplit import *
+except ImportError:
+    pass
 # from torch.distributed.pipelining
 from typing import Callable, Dict, List, Tuple
 

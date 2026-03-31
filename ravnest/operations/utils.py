@@ -4,9 +4,12 @@ import pickle
 # from pip._internal.operations.freeze import freeze
 
 from torch.fx import Tracer
-from pippy.IR import Pipe
-# from torch.distributed.pipelining import Pipe
-from pippy import split_into_equal_size
+try:
+    from pippy.IR import Pipe
+    from pippy import split_into_equal_size
+except ImportError:
+    Pipe = None
+    split_into_equal_size = None
 
 from .pippy_utils import split_on_proportions
 from .genetic import genetic_algorithm

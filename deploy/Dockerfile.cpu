@@ -10,9 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install PyTorch CPU-only
 RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-# Copy requirements and install Python deps (skip torch since already installed, skip torchpippy and nvidia)
+# Copy requirements and install Python deps (skip torch since already installed, skip nvidia)
 COPY requirements.txt .
-RUN pip install --no-cache-dir $(grep -v -E 'torch|torchpippy|nvidia' requirements.txt) \
+RUN pip install --no-cache-dir $(grep -v -E 'torch|nvidia' requirements.txt) \
     && pip install --no-cache-dir fastapi uvicorn "transformers<4.51" accelerate
 
 # Copy the project

@@ -5,7 +5,7 @@ protobuf==4.24.4
 scikit_learn
 torch
 torchvision
-torchpippy==0.2.0
+# torchpippy==0.2.0  # Optional: needed for training-time model splitting via PiPPy. Install manually if needed.
 packaging
 psutil
 nvidia-ml-py3
