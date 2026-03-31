@@ -211,26 +211,34 @@ class InferenceEngine():
 
         return input_ids #tokenizer_decode_batch(input_ids, self.tokenizer)
 
+    def reset_kv_cache(self):
+        """Free all allocated KV cache blocks between requests."""
+        if hasattr(self, 'kv_cache_engine') and self.kv_cache_engine is not None:
+            cm = self.kv_cache_engine.cache_manager
+            for block in cm._cache_blocks:
+                block._ref_count = 0
+                block.allocated_size = 0
+            cm._block_states.fill_(1)
+            cm._available_blocks = cm.num_blocks
+            self.kv_cache_engine._block_tables.fill_(-1)
+            self.kv_cache_engine._block_tables_helper.fill_(-1)
+        self.use_prefill = True
+
     def generate(self, prompt_list=None, max_seq_lengths=None, top_k=1, temperature=1.0):
-        prompt_list = self.broadcast_prompt_list(prompt_list)        
-        tokenized_and_padded_batch, unpadded_seq_lengths = self.tokenize_and_pad_batch(prompt_list)#.to(self.node.device)
+        self.reset_kv_cache()
+        prompt_list = self.broadcast_prompt_list(prompt_list)
+        tokenized_and_padded_batch, unpadded_seq_lengths = self.tokenize_and_pad_batch(prompt_list)
         print('Unpadded seq lengths: ', unpadded_seq_lengths)
         print('tokenized_and_padded_batch:', tokenized_and_padded_batch['input_ids'].shape, len(tokenized_and_padded_batch))
         if self.use_prefill:
             self.kv_cache_engine.allocate_block_tables_for_batch(tokenized_and_padded_batch['input_ids'], unpadded_seq_lengths)
             self.k_caches, self.v_caches = self.kv_cache_engine.get_kv_caches()
 
-        generated_tokens = self._generate(**tokenized_and_padded_batch, 
-                                        max_seq_lengths=max_seq_lengths, 
+        generated_tokens = self._generate(**tokenized_and_padded_batch,
+                                        max_seq_lengths=max_seq_lengths,
                                         top_k=top_k, temperature=temperature,
                                         context_lengths=unpadded_seq_lengths)
 
-        # for i in range(5):
-        #     k_cache = self.k_caches[i]
-        #     print('\nLayer: ', i)
-        #     print('k_cache: ', k_cache[0], k_cache[18])
-        # if self.track_mem_usage:
-        #     self.memory_tracker.update_metrics()
         print('Generated tokens: ', generated_tokens.shape)
         return self.tokenizer_decode_batch(generated_tokens)
 
