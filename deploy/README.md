@@ -1,82 +1,174 @@
-# Ravnest Distributed Inference Demo
+# Ravnest Distributed Inference
 
-Run Llama-3.2-3B distributed across 2 GPU containers with an OpenAI-compatible API.
-
-## Prerequisites
-
-- Docker with [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
-- At least 1 NVIDIA GPU with 8GB+ VRAM
-- HuggingFace account with access to `meta-llama/Llama-3.2-3B`
+Run LLMs split across multiple machines with an OpenAI-compatible API.
 
 ## Quick Start
 
+**Using the CLI** (recommended):
 ```bash
-# 1. Build and start (first run downloads the model, takes a few minutes)
+pip install -e .
+ravnest up                    # auto-detects GPU/CPU, picks model, starts serving
+ravnest up -m meta-llama/Llama-3.1-8B -n 3 -k my-secret-key
+ravnest status
+ravnest down
+```
+
+**Using Docker Compose directly:**
+```bash
 cd deploy
+
+# GPU (requires NVIDIA Container Toolkit)
 docker compose up --build
 
-# 2. Wait for "Starting API server on 0.0.0.0:8000" in the logs
+# CPU (for testing without GPU)
+docker compose -f docker-compose.cpu.yml up --build
+```
 
-# 3. Send a request
+## Prerequisites
+
+**GPU setup:**
+- Docker with [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+- At least 1 NVIDIA GPU with 8GB+ VRAM
+- HuggingFace account with access to gated models (Llama)
+
+**CPU setup:**
+- Docker
+- ~4GB RAM per node
+
+## API
+
+OpenAI-compatible chat completions at `http://localhost:8000`.
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/chat/completions` | POST | Chat completion (streaming and non-streaming) |
+| `/health` | GET | Health check |
+
+### Non-streaming request
+
+```bash
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "ravnest",
-    "messages": [{"role": "user", "content": "Hello, how are you?"}],
+    "messages": [{"role": "user", "content": "Hello"}],
     "max_tokens": 50
   }'
-
-# 4. Stop
-docker compose down
 ```
+
+### Streaming request
+
+```bash
+curl -N -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "ravnest",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 50,
+    "stream": true
+  }'
+```
+
+Streaming returns Server-Sent Events in the OpenAI format:
+```
+data: {"choices":[{"delta":{"content":"Hello"}}]}
+data: {"choices":[{"delta":{"content":" there"}}]}
+data: [DONE]
+```
+
+### Authentication
+
+Set `RAVNEST_API_KEY` to require Bearer token auth. If not set, all requests are allowed.
+
+```bash
+# With Docker Compose
+RAVNEST_API_KEY=my-secret docker compose up
+
+# With CLI
+ravnest up --api-key my-secret
+
+# Sending authenticated requests
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer my-secret" \
+  -d '{"model":"ravnest","messages":[{"role":"user","content":"Hello"}],"max_tokens":10}'
+```
+
+The health endpoint (`/health`) does not require auth.
+
+### Compatible tools
+
+Works with any tool that speaks the OpenAI protocol. Point it at `http://localhost:8000`:
+- Open WebUI
+- LangChain
+- Continue.dev
+- LiteLLM
+- Any OpenAI SDK client
 
 ## Configuration
 
-Edit `docker-compose.yml` to change:
+### CLI options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model, -m` | auto (Llama-3.2-3B for GPU, TinyLlama for CPU) | HuggingFace model ID |
+| `--nodes, -n` | 2 | Number of pipeline stages |
+| `--device, -d` | auto-detect | `cpu` or `cuda` |
+| `--port, -p` | 8000 | API port |
+| `--api-key, -k` | none | API key for Bearer auth |
+
+### Docker Compose environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MODEL_NAME` | `meta-llama/Llama-3.2-3B` | HuggingFace model ID |
 | `WORLD_SIZE` | `2` | Number of pipeline stages |
 | `MASTER_PORT` | `29500` | torch.distributed rendezvous port |
+| `RAVNEST_DEVICE` | auto | `cpu` or `cuda` |
+| `RAVNEST_API_KEY` | none | API key for Bearer auth |
 
-## API
+### Supported models
 
-OpenAI-compatible chat completions endpoint:
-
-- `POST /v1/chat/completions` - Non-streaming chat completion
-- `GET /health` - Health check
-
-Works with Open WebUI, LangChain, Continue.dev, and any tool that speaks the OpenAI protocol.
-Point your tool at `http://localhost:8000`.
+Any model with a Ravnest split spec:
+- Llama (1B, 3B, 8B, 8B-Instruct)
+- Qwen-2
+- TinyLlama (good for CPU testing)
 
 ## Running the Smoke Test
 
 ```bash
-# With the containers running:
+# Without auth
 bash deploy/test.sh
+
+# With auth
+RAVNEST_API_KEY=my-secret bash deploy/test.sh
 ```
 
 ## How It Works
 
 ```
-User → HTTP POST → node-0 (root)
-                    ├── Tokenize prompt
-                    ├── Forward through layers 0-N
-                    ├── Send activations → node-1 (leaf)
-                    │                      ├── Forward through layers N+1-M
-                    │                      └── Broadcast next token back
-                    ├── Receive token
-                    ├── Repeat until done
-                    └── Detokenize → HTTP response
+                         ┌─────────────────────────────────────┐
+                         │          Docker Network              │
+User ──── HTTP ────────► │                                      │
+                         │  node-0 (root)      node-1 (leaf)    │
+                         │  ┌─────────────┐   ┌─────────────┐  │
+                         │  │ FastAPI API  │   │             │  │
+                         │  │ Layers 0-N   │──►│ Layers N+1-M│  │
+                         │  │             │◄──│ (feedback)   │  │
+                         │  └─────────────┘   └─────────────┘  │
+                         │        │                             │
+                         │  shared volume (model weights)       │
+                         └─────────────────────────────────────┘
 ```
 
-Both containers load the full model checkpoint, then each prunes to its own layers
-using Ravnest's pipeline split spec. Communication uses PyTorch distributed (Gloo backend).
+1. Both containers download the full model, each prunes to its own layers
+2. Communication uses PyTorch distributed (Gloo for CPU/cross-container, NCCL for GPU)
+3. Tokens are generated one at a time: root forwards through its layers, sends activations to leaf, leaf computes and broadcasts the next token back
+4. KV cache with paged attention keeps memory usage efficient
 
-## Limitations (v0.1)
+## Current Limitations
 
-- Non-streaming only (streaming in v0.2)
 - Single request at a time (returns 503 if busy)
-- Same-machine only (cross-machine in v0.2)
-- No authentication
+- Same-machine only (cross-machine in a future release)
