@@ -3,8 +3,15 @@
 set -e
 
 API_URL="${API_URL:-http://localhost:8000}"
+API_KEY="${RAVNEST_API_KEY:-}"
 PASS=0
 FAIL=0
+
+# Build auth args for curl
+AUTH=()
+if [ -n "$API_KEY" ]; then
+    AUTH=(-H "Authorization: Bearer $API_KEY")
+fi
 
 check() {
     local name="$1"
@@ -21,27 +28,24 @@ check() {
 
 echo "=== Ravnest Smoke Tests ==="
 echo "API: $API_URL"
+[ -n "$API_KEY" ] && echo "Auth: enabled" || echo "Auth: disabled"
 echo ""
 
-# 1. Health check
+# 1. Health check (no auth required)
 echo "--- Health Check ---"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL/health")
 check "Health endpoint" "200" "$CODE"
 
-# 2. Happy path - send a prompt, get a completion
+# 2. Happy path
 echo "--- Happy Path ---"
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$API_URL/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{
-        "model": "ravnest",
-        "messages": [{"role": "user", "content": "Say hello in one word."}],
-        "max_tokens": 10
-    }')
+    "${AUTH[@]}" \
+    -d '{"model":"ravnest","messages":[{"role":"user","content":"Say hello in one word."}],"max_tokens":10}')
 CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | head -n -1)
 check "Chat completion" "200" "$CODE"
 
-# Verify response has choices
 if echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['choices'][0]['message']['content']" 2>/dev/null; then
     echo "PASS: Response has content"
     PASS=$((PASS + 1))
@@ -50,25 +54,41 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# 3. Empty messages - should get 400
+# 3. Empty messages
 echo "--- Empty Messages ---"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model": "ravnest", "messages": [], "max_tokens": 10}')
+    "${AUTH[@]}" \
+    -d '{"model":"ravnest","messages":[],"max_tokens":10}')
 check "Empty messages" "400" "$CODE"
 
-# 4. Concurrent request - should get 503
+# 4. Auth tests (only when API key is set)
+if [ -n "$API_KEY" ]; then
+    echo "--- Auth Tests ---"
+    CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"ravnest","messages":[{"role":"user","content":"Hi"}],"max_tokens":2}')
+    check "No auth header rejected" "401" "$CODE"
+
+    CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer wrong-key-here" \
+        -d '{"model":"ravnest","messages":[{"role":"user","content":"Hi"}],"max_tokens":2}')
+    check "Wrong API key rejected" "401" "$CODE"
+fi
+
+# 5. Concurrent request
 echo "--- Concurrent Request ---"
-# Start a long request in background
 curl -s -o /dev/null -X POST "$API_URL/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model": "ravnest", "messages": [{"role": "user", "content": "Write a long story about a cat."}], "max_tokens": 50}' &
+    "${AUTH[@]}" \
+    -d '{"model":"ravnest","messages":[{"role":"user","content":"Write a long story."}],"max_tokens":50}' &
 BG_PID=$!
 sleep 1
-# Try a second request while first is running
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model": "ravnest", "messages": [{"role": "user", "content": "Hi"}], "max_tokens": 5}')
+    "${AUTH[@]}" \
+    -d '{"model":"ravnest","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}')
 check "Concurrent request rejected" "503" "$CODE"
 wait $BG_PID 2>/dev/null || true
 

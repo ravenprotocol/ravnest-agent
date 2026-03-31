@@ -3,15 +3,19 @@ OpenAI-compatible chat completions API server for Ravnest distributed inference.
 
 Supports both streaming (SSE) and non-streaming responses.
 Single-request-at-a-time. Wraps InferenceEngine.generate() and generate_stream().
+
+Auth: set RAVNEST_API_KEY env var to require Bearer token auth.
+If not set, all requests are allowed (open access).
 """
 
 import json
+import os
 import time
 import threading
 import uuid
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -55,6 +59,25 @@ def create_app(engine, tokenizer):
     app = FastAPI(title="Ravnest Inference API")
     lock = threading.Lock()
     MAX_SEQ_LENGTH = 3000
+    API_KEY = os.environ.get("RAVNEST_API_KEY", "")
+
+    if API_KEY:
+        print(f"[api] API key auth enabled (key length: {len(API_KEY)})")
+    else:
+        print("[api] API key auth disabled (set RAVNEST_API_KEY to enable)")
+
+    def check_auth(request: Request):
+        if not API_KEY:
+            return
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            raise HTTPException(
+                status_code=401,
+                detail="Missing API key. Use: Authorization: Bearer <your-key>",
+            )
+        token = auth_header[7:]
+        if token != API_KEY:
+            raise HTTPException(status_code=401, detail="Invalid API key")
 
     def build_prompt(messages):
         prompt_parts = []
@@ -89,7 +112,8 @@ def create_app(engine, tokenizer):
         return {"status": "ok"}
 
     @app.post("/v1/chat/completions")
-    def chat_completions(request: ChatCompletionRequest):
+    def chat_completions(request: ChatCompletionRequest, raw_request: Request):
+        check_auth(raw_request)
         prompt, prompt_token_count = validate_request(request)
 
         acquired = lock.acquire(blocking=False)
@@ -183,7 +207,6 @@ def create_app(engine, tokenizer):
                     }
                     yield f"data: {json.dumps(chunk)}\n\n"
 
-                # Final chunk with finish_reason
                 final_chunk = {
                     "id": completion_id,
                     "object": "chat.completion.chunk",

@@ -14,6 +14,7 @@ services:
       - MASTER_PORT=29500
       - MODEL_NAME=meta-llama/Llama-3.2-3B
       - NODE_ROLE=root
+      - RAVNEST_API_KEY=${RAVNEST_API_KEY:-}
     volumes:
       - model_cache:/app/model_cache
     ports:

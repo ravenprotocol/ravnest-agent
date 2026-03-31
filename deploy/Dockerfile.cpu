@@ -13,10 +13,10 @@ RUN pip install --no-cache-dir torch torchvision --index-url https://download.py
 # Copy requirements and install Python deps (skip torch since already installed, skip nvidia)
 COPY requirements.txt .
 RUN pip install --no-cache-dir $(grep -v -E 'torch|nvidia' requirements.txt) \
-    && pip install --no-cache-dir fastapi uvicorn "transformers<4.51" accelerate
+    && pip install --no-cache-dir fastapi uvicorn "transformers<4.51" accelerate torchinfo
 
 # Copy the project
 COPY . .
-RUN pip install --no-cache-dir -e .
+ENV PYTHONPATH=/app
 
 EXPOSE 8000
