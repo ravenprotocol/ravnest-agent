@@ -114,10 +114,12 @@ Works with any tool that speaks the OpenAI protocol. Point it at `http://localho
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--model, -m` | auto (Llama-3.2-3B for GPU, TinyLlama for CPU) | HuggingFace model ID |
-| `--nodes, -n` | 2 | Number of pipeline stages |
+| `--nodes, -n` | 2 | Number of pipeline stages on this machine |
 | `--device, -d` | auto-detect | `cpu` or `cuda` |
 | `--port, -p` | 8000 | API port |
 | `--api-key, -k` | none | API key for Bearer auth |
+| `--master-addr` | none | IP address for cross-machine mode |
+| `--world-size, -w` | same as --nodes | Total nodes across all machines |
 
 ### Docker Compose environment variables
 
@@ -168,7 +170,37 @@ User ──── HTTP ────────► │                          
 3. Tokens are generated one at a time: root forwards through its layers, sends activations to leaf, leaf computes and broadcasts the next token back
 4. KV cache with paged attention keeps memory usage efficient
 
+## Cross-Machine Inference
+
+Run a model split across multiple physical machines. Each machine downloads the model
+independently and connects via Gloo over the network.
+
+**Machine 1 (root, IP: 192.168.1.100):**
+```bash
+ravnest up --master-addr 192.168.1.100 --nodes 1 --world-size 2 --model meta-llama/Llama-3.2-3B
+```
+
+**Machine 2 (leaf):**
+```bash
+ravnest join --master-addr 192.168.1.100 --rank 1 --world-size 2 --model meta-llama/Llama-3.2-3B
+```
+
+**3+ machines:**
+```bash
+# Machine 1 (root)
+ravnest up --master-addr 192.168.1.100 --nodes 1 --world-size 3
+
+# Machine 2
+ravnest join --master-addr 192.168.1.100 --rank 1 --world-size 3
+
+# Machine 3
+ravnest join --master-addr 192.168.1.100 --rank 2 --world-size 3
+```
+
+Cross-machine mode uses `network_mode: host` so containers share the host's network.
+All machines must be on the same LAN and able to reach each other on port 29500 (Gloo)
+and port 8000 (API, root only).
+
 ## Current Limitations
 
 - Single request at a time (returns 503 if busy)
-- Same-machine only (cross-machine in a future release)
