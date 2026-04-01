@@ -138,14 +138,53 @@ Any model with a Ravnest split spec:
 - Qwen-2
 - TinyLlama (good for CPU testing)
 
-## Running the Smoke Test
+## Dynamic Cluster (Coordinator Mode)
+
+For communities or teams, the coordinator manages nodes dynamically. Workers register,
+hardware is auto-profiled, and layers are distributed proportionally. When nodes
+join or leave, the cluster reconfigures automatically via barrier synchronization.
+
+**Machine 1 (coordinator):**
+```bash
+ravnest coordinator --min-nodes 2 --model meta-llama/Llama-3.2-3B
+```
+
+**Machine 2+ (workers):**
+```bash
+ravnest worker --coordinator http://machine1:8080
+```
+
+The coordinator:
+- Auto-detects each worker's hardware (GPU VRAM or CPU RAM)
+- Computes optimal layer proportions (GPU memory weighted 10x vs CPU)
+- Distributes configuration to all workers
+- Barrier-synchronizes reconfiguration when nodes join or leave
+- Workers hot-swap: model stays in memory, only layers and connections rebuild
+
+```
+  Coordinator (:8080)
+  ├── /register — workers join
+  ├── /config   — workers get rank, proportions, peer IPs
+  ├── /ready    — workers signal ready for reconfigure
+  ├── /barrier  — workers poll until all ready
+  └── /status   — cluster overview
+
+  Worker 0 (RTX 3090)  →  layers 0-18   (71%)
+  Worker 1 (CPU 16GB)  →  layers 18-19  (5%)
+  Worker 2 (RTX 4060)  →  layers 19-22  (24%)
+```
+
+## Running Tests
 
 ```bash
-# Without auth
+# Basic smoke test (2-node Docker Compose)
 bash deploy/test.sh
 
 # With auth
 RAVNEST_API_KEY=my-secret bash deploy/test.sh
+
+# Coordinator test suite (registration, barrier, proportions, integration)
+bash deploy/test_coordinator.sh
 ```
 
 ## How It Works
