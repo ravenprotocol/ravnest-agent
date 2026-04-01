@@ -75,7 +75,8 @@ def create_node_and_engine():
             my_info, proportions = report_hardware_to_root(rank, master_addr)
         print(f"[node-{rank}] Auto-profiled proportions: {proportions}")
 
-    print(f"[node-{rank}] Creating Node (reduce_factor=1, backend=gloo, timeout={timeout_minutes}min)...")
+    backend = os.environ.get("RAVNEST_BACKEND", "gloo")
+    print(f"[node-{rank}] Creating Node (reduce_factor=1, backend={backend}, timeout={timeout_minutes}min)...")
     node = Node(
         model=model,
         device=device,
@@ -83,7 +84,7 @@ def create_node_and_engine():
         batch_size=1,
         mode="inference",
         seq_length=5,
-        backend="gloo",
+        backend=backend,
         cluster_length=2,
         reduce_factor=1,
         dist_timeout=timeout_minutes,

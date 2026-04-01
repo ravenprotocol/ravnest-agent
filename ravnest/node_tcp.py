@@ -1,4 +1,5 @@
 import multiprocessing
+import os
 from threading import Thread
 import psutil
 import pickle
@@ -9,6 +10,7 @@ import torch.distributed as dist
 from datetime import timedelta
 
 from .communication import Communication_Torch, Communication_GRPC
+from .communication.communication_dynamic import Communication_Dynamic
 from .compute import Compute
 from .pipeline_split.split_spec import get_split_spec
 from .utils import *
@@ -121,7 +123,7 @@ class Node():
                                         layer_start_idx = self.layer_start_idx, layer_end_idx = self.layer_end_idx, loss_filename=self.loss_filename, device = self.device) 
 
     def init_comm_session(self):
-        assert self.backend in ['grpc', 'gloo', 'nccl'], 'Backend must be set to one of grpc, gloo or nccl'
+        assert self.backend in ['grpc', 'gloo', 'nccl', 'dynamic'], 'Backend must be set to one of grpc, gloo, nccl, or dynamic'
         if self.backend == 'grpc':
 
             self.comm_session = Communication_GRPC(name=self.name,
@@ -133,27 +135,36 @@ class Node():
                                             ring_size=self.ring_size,
                                             ring_param_keys=self.ring_param_keys,
                                             ring_ids = self.ring_ids,
-                                            param_address_mapping=self.param_address_mapping, 
+                                            param_address_mapping=self.param_address_mapping,
                                             device=self.device,
                                             compression=self.compression,
-                                            forward_target_host=self.forward_target_host, 
-                                            forward_target_port=self.forward_target_port, 
-                                            backward_target_host=self.backward_target_host, 
-                                            backward_target_port=self.backward_target_port, 
+                                            forward_target_host=self.forward_target_host,
+                                            forward_target_port=self.forward_target_port,
+                                            backward_target_host=self.backward_target_host,
+                                            backward_target_port=self.backward_target_port,
                                             retrieve_latest_params_data=self.retrieve_latest_params_data,
-                                            output_tensors=self.output_tensors, 
+                                            output_tensors=self.output_tensors,
                                             input_tensors=self.input_tensors,
-                                            submod_file=self.submod_file, 
-                                            tensor_id=self.tensor_id, 
+                                            submod_file=self.submod_file,
+                                            tensor_id=self.tensor_id,
                                             averaged_params_buffer=self.averaged_params_buffer,
                                             average_no=self.average_no,
                                             average_optim = self.average_optim,
                                             output_template=self.output_template,
                                             model_inputs_template=self.model_inputs_template
                                             )
+        elif self.backend == 'dynamic':
+
+            self.comm_session = Communication_Dynamic(
+                                                    rank=int(os.environ.get("RANK", "0")),
+                                                    world_size=int(os.environ.get("WORLD_SIZE", "2")),
+                                                    mode=self.mode,
+                                                    input_tensors=self.input_tensors,
+                                                    forward_input_shapes=self.forward_input_shapes,
+                                                    backward_input_shapes=self.backward_input_shapes,
+                                                    feedback_shape=self.feedback_shape,
+                                                    dtype=self.dtype, device=self.device)
         else:
-            
-            
 
             self.comm_session = Communication_Torch(input_tensors=self.input_tensors,
                                                     dist_timeout = self.dist_timeout,
