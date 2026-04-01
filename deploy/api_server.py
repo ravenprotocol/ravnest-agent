@@ -61,6 +61,10 @@ def create_app(engine, tokenizer):
     MAX_SEQ_LENGTH = 3000
     API_KEY = os.environ.get("RAVNEST_API_KEY", "")
 
+    # Mutable container so engine/tokenizer can be swapped during hot-reconfigure
+    app.state.engine = engine
+    app.state.tokenizer = tokenizer
+
     if API_KEY:
         print(f"[api] API key auth enabled (key length: {len(API_KEY)})")
     else:
@@ -96,7 +100,7 @@ def create_app(engine, tokenizer):
             raise HTTPException(status_code=400, detail="messages array is required and must not be empty")
 
         prompt = build_prompt(request.messages)
-        prompt_token_count = len(tokenizer.encode(prompt))
+        prompt_token_count = len(app.state.tokenizer.encode(prompt))
         total_seq_length = prompt_token_count + request.max_tokens
 
         if total_seq_length > MAX_SEQ_LENGTH:
@@ -139,7 +143,7 @@ def create_app(engine, tokenizer):
         try:
             start_time = time.time()
 
-            outputs = engine.generate(
+            outputs = app.state.engine.generate(
                 prompt_list=[prompt],
                 max_seq_lengths=[request.max_tokens],
                 top_k=request.top_k,
@@ -153,7 +157,7 @@ def create_app(engine, tokenizer):
                 generated_text = generated_text[len(prompt):]
             generated_text = generated_text.strip()
 
-            completion_tokens = len(tokenizer.encode(generated_text))
+            completion_tokens = len(app.state.tokenizer.encode(generated_text))
 
             print(f"[api] Request completed in {elapsed:.2f}s, "
                   f"prompt={prompt_token_count} tokens, completion={completion_tokens} tokens")
@@ -185,7 +189,7 @@ def create_app(engine, tokenizer):
         def event_stream():
             try:
                 completion_tokens = 0
-                for token_text in engine.generate_stream(
+                for token_text in app.state.engine.generate_stream(
                     prompt_list=[prompt],
                     max_seq_lengths=[request.max_tokens],
                     top_k=request.top_k,

@@ -250,40 +250,95 @@ class Worker:
         self.inference_thread = threading.Thread(target=leaf_loop, daemon=True)
         self.inference_thread.start()
 
-    def reconfigure(self, config):
-        """Hot-reconfigure: rebuild connections and re-split layers.
+    def wait_barrier(self, version, timeout=300):
+        """Signal ready and wait for all workers to be ready."""
+        # Signal we're ready
+        try:
+            resp = requests.post(
+                f"{self.coordinator_url}/ready/{self.node_id}/{version}",
+                timeout=10,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            print(f"[worker] Signaled ready for v{version} "
+                  f"({result['ready_count']}/{result['total_needed']})")
+        except Exception as e:
+            print(f"[worker] Failed to signal ready: {e}")
+            return False
 
-        The model stays in memory. Only communication and layer assignment change.
-        API requests get 503 during reconfiguration (~10-30s).
+        # Poll barrier until all ready
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                resp = requests.get(
+                    f"{self.coordinator_url}/barrier/{version}",
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                result = resp.json()
+                if result["all_ready"]:
+                    print(f"[worker] Barrier cleared for v{version} "
+                          f"({result['ready_count']}/{result['total_needed']})")
+                    return True
+                time.sleep(1)
+            except Exception as e:
+                print(f"[worker] Barrier check error: {e}")
+                time.sleep(2)
+
+        print(f"[worker] Barrier timeout for v{version}")
+        return False
+
+    def reconfigure(self, config):
+        """Hot-reconfigure with barrier synchronization.
+
+        1. Load model (if needed)
+        2. Close old connections
+        3. Signal ready to coordinator
+        4. Wait for all workers to be ready (barrier)
+        5. Build new connections simultaneously
+        6. Resume inference
         """
-        print(f"[worker] === RECONFIGURING (v{self.current_version} -> v{config['cluster_version']}) ===")
-        self.reconfiguring.clear()  # signal "reconfiguring"
+        version = config["cluster_version"]
+        print(f"[worker] === RECONFIGURING (v{self.current_version} -> v{version}) ===")
+        self.reconfiguring.clear()  # pause inference
 
         try:
-            # Load model if not loaded yet
+            # Step 1: Load model
             model_name = config.get("model") or self.model_name or "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
             self.load_model(model_name)
 
-            # Build new pipeline
+            # Step 2: Close old connections
+            if self.node and hasattr(self.node, 'comm_session'):
+                if hasattr(self.node.comm_session, 'close'):
+                    print("[worker] Closing old connections...")
+                    self.node.comm_session.close()
+
+            # Step 3+4: Signal ready and wait for barrier
+            print(f"[worker] Waiting for all workers to be ready...")
+            if not self.wait_barrier(version):
+                print(f"[worker] Barrier failed, proceeding anyway")
+
+            # Step 5: Build new pipeline (all workers do this simultaneously)
             self.configure_pipeline(config)
 
-            # Start/restart role-specific loops
+            # Step 6: Start/restart role-specific loops
             rank = config["rank"]
             if rank == 0:
-                # Update the API server's engine reference
                 if self.api_app:
-                    # The API server holds a reference to engine via closure.
-                    # We need to restart it with the new engine.
-                    pass
-                self.start_api_server()
+                    # Hot-swap: update the engine reference in the running API server
+                    self.api_app.state.engine = self.engine
+                    self.api_app.state.tokenizer = self.tokenizer
+                    print("[worker] Swapped engine in running API server")
+                else:
+                    self.start_api_server()
             else:
                 self.start_leaf_loop()
 
-            self.current_version = config["cluster_version"]
+            self.current_version = version
             print(f"[worker] === RECONFIGURED (v{self.current_version}) ===")
 
         finally:
-            self.reconfiguring.set()  # signal "ready"
+            self.reconfiguring.set()  # resume inference
 
     def run(self):
         """Main worker loop."""

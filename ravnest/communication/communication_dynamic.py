@@ -342,15 +342,19 @@ class Communication_Dynamic:
         self.feedback_ip = torch.zeros(self.feedback_shape, dtype=torch.int64).to(self.device)
 
         if self.node_type == NodeTypes.ROOT:
-            # Root receives from leaf via metadata channel
+            # Root receives from leaf, then forwards to all stem nodes
             leaf_rank = self.world_size - 1
             meta_key = f"meta_{leaf_rank}"
-            self.feedback_recv_work = AsyncWork(
-                lambda: setattr(self, 'feedback_ip',
-                    TensorSocket.recv_tensor(self.peers[meta_key], device=str(self.device)))
-            )
+            def recv_and_forward():
+                token = TensorSocket.recv_tensor(self.peers[meta_key], device=str(self.device))
+                self.feedback_ip = token
+                # Forward to stem nodes (all meta_ peers except the leaf)
+                for key, sock in self.peers.items():
+                    if isinstance(key, str) and key.startswith("meta_") and key != meta_key:
+                        TensorSocket.send_tensor(sock, token)
+            self.feedback_recv_work = AsyncWork(recv_and_forward)
         else:
-            # Non-root receives from root via metadata channel
+            # Non-root (stem/leaf) receives from root via metadata channel
             self.feedback_recv_work = AsyncWork(
                 lambda: setattr(self, 'feedback_ip',
                     TensorSocket.recv_tensor(self.peers["meta_root"], device=str(self.device)))

@@ -40,6 +40,8 @@ class ClusterState:
         self.lock = threading.Lock()
         self.model = None
         self.device = None
+        # Barrier: tracks which nodes are ready for which version
+        self.ready_nodes: Dict[int, set] = {}  # version -> set of node_ids
 
     def register(self, node_id: str, hardware: dict) -> dict:
         with self.lock:
@@ -81,8 +83,36 @@ class ClusterState:
                     del self.nodes[nid]
                 self._recompute()
 
+    def signal_ready(self, node_id: str, version: int) -> dict:
+        """Node signals it's ready to reconfigure to this version."""
+        with self.lock:
+            if node_id not in self.nodes:
+                raise KeyError(f"Node {node_id} not registered")
+            if version not in self.ready_nodes:
+                self.ready_nodes[version] = set()
+            self.ready_nodes[version].add(node_id)
+
+            all_ready = self._check_barrier(version)
+            return {
+                "version": version,
+                "your_ready": True,
+                "all_ready": all_ready,
+                "ready_count": len(self.ready_nodes.get(version, set())),
+                "total_needed": len(self.nodes),
+            }
+
+    def _check_barrier(self, version: int) -> bool:
+        """Check if all current nodes are ready for this version."""
+        if version not in self.ready_nodes:
+            return False
+        current_nodes = set(self.nodes.keys())
+        ready = self.ready_nodes[version]
+        return current_nodes.issubset(ready)
+
     def _recompute(self):
         """Recompute ranks and proportions based on current nodes."""
+        # Clear old barriers
+        self.ready_nodes = {}
         sorted_nodes = sorted(self.nodes.keys())
         hardware_list = []
         for i, nid in enumerate(sorted_nodes):
@@ -183,6 +213,27 @@ def create_coordinator_app(min_nodes=2, heartbeat_timeout=60, model=None, device
                 "model": state.model,
                 "device": state.device,
                 "peers": peers,
+            }
+
+    @app.post("/ready/{node_id}/{version}")
+    def signal_ready(node_id: str, version: int):
+        """Worker signals it's ready for a specific cluster version."""
+        try:
+            return state.signal_ready(node_id, version)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"Node {node_id} not registered")
+
+    @app.get("/barrier/{version}")
+    def check_barrier(version: int):
+        """Check if all nodes are ready for this version."""
+        with state.lock:
+            all_ready = state._check_barrier(version)
+            ready_count = len(state.ready_nodes.get(version, set()))
+            return {
+                "version": version,
+                "all_ready": all_ready,
+                "ready_count": ready_count,
+                "total_needed": len(state.nodes),
             }
 
     return app
