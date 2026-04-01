@@ -106,8 +106,15 @@ class Worker:
     def heartbeat(self):
         try:
             resp = requests.post(f"{self.coordinator_url}/heartbeat/{self.node_id}", timeout=10)
+            if resp.status_code == 404:
+                # We've been removed (heartbeat timeout). Re-register.
+                print("[worker] Removed from coordinator (heartbeat timeout). Re-registering...")
+                return self.register()
             resp.raise_for_status()
             return resp.json()
+        except requests.ConnectionError:
+            print("[worker] Coordinator unreachable")
+            return None
         except Exception as e:
             print(f"[worker] Heartbeat error: {e}")
             return None
@@ -182,6 +189,7 @@ class Worker:
         print(f"[worker] Copying model for rank {rank} (proportions: {proportions})...")
         model_copy = copy.deepcopy(self.full_model)
         model_copy.eval()
+        self.heartbeat()  # keep alive during slow setup
 
         print(f"[worker] Creating Node (rank={rank}, world_size={world_size}, backend=dynamic, peers={peer_ips})...")
         self.node = Node(
@@ -200,7 +208,9 @@ class Worker:
         self.node.model.eval()
 
         print(f"[worker] Creating InferenceEngine...")
-        self.engine = InferenceEngine(self.node, self.tokenizer)
+        # Disable memory tracking for dynamic backend (gather_at_root is a collective
+        # that requires all nodes to participate simultaneously, which is fragile)
+        self.engine = InferenceEngine(self.node, self.tokenizer, track_mem_usage=False)
 
         print(f"[worker] Pipeline ready. Layers {self.node.layer_start_idx}-{self.node.layer_end_idx}")
         return self.engine
@@ -223,6 +233,14 @@ class Worker:
         self.api_thread.start()
         print(f"[worker] API server started on port {port}")
 
+    def is_connection_error(self, error):
+        """Check if an error indicates a dead peer (broken pipe, connection reset, etc)."""
+        err_str = str(error).lower()
+        return any(x in err_str for x in [
+            "connection", "broken pipe", "reset by peer", "timed out",
+            "connection closed", "eof", "errno",
+        ])
+
     def start_leaf_loop(self):
         """Start leaf receive loop in a background thread."""
         if self.inference_thread and self.inference_thread.is_alive():
@@ -236,11 +254,24 @@ class Worker:
                     continue
                 try:
                     self.engine.generate(prompt_list=None, max_seq_lengths=None)
+                except (ConnectionError, BrokenPipeError, OSError) as e:
+                    if not self.running:
+                        break
+                    print(f"[worker] Connection lost during inference: {e}")
+                    print("[worker] A peer node may have crashed. Waiting for reconfigure...")
+                    self.reconfiguring.clear()
+                    time.sleep(10)
                 except RuntimeError as e:
                     if not self.running:
                         break
-                    print(f"[worker] Generation error: {e}")
-                    time.sleep(5)
+                    if self.is_connection_error(e):
+                        print(f"[worker] Connection error during inference: {e}")
+                        print("[worker] Waiting for coordinator to detect and reconfigure...")
+                        self.reconfiguring.clear()
+                        time.sleep(10)
+                    else:
+                        print(f"[worker] Generation error: {e}")
+                        time.sleep(5)
                 except Exception as e:
                     if not self.running:
                         break
@@ -250,8 +281,13 @@ class Worker:
         self.inference_thread = threading.Thread(target=leaf_loop, daemon=True)
         self.inference_thread.start()
 
-    def wait_barrier(self, version, timeout=300):
-        """Signal ready and wait for all workers to be ready."""
+    def wait_barrier(self, version, timeout=90):
+        """Signal ready and wait for all workers to be ready.
+
+        Timeout is short (90s) because if a node died, the coordinator
+        will remove it within ~60s (heartbeat timeout) and the barrier
+        auto-clears against the remaining nodes.
+        """
         # Signal we're ready
         try:
             resp = requests.post(
@@ -303,9 +339,13 @@ class Worker:
         self.reconfiguring.clear()  # pause inference
 
         try:
+            # Keep heartbeat alive during reconfigure
+            self.heartbeat()
+
             # Step 1: Load model
             model_name = config.get("model") or self.model_name or "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
             self.load_model(model_name)
+            self.heartbeat()  # keep alive after model load
 
             # Step 2: Close old connections
             if self.node and hasattr(self.node, 'comm_session'):
@@ -372,6 +412,20 @@ class Worker:
 
             if config["cluster_version"] != self.current_version:
                 self.reconfigure(config)
+
+            # Check if inference was paused due to connection error
+            if not self.reconfiguring.is_set() and self.current_version > 0:
+                print("[worker] Inference paused (connection error). Checking for reconfigure...")
+                status = self.heartbeat()
+                if status and status["cluster_version"] != self.current_version:
+                    config = self.get_config()
+                    if config:
+                        self.reconfigure(config)
+                    continue
+                # If version hasn't changed yet, coordinator may not have
+                # detected the dead node yet. Wait and retry.
+                time.sleep(5)
+                continue
 
             status = self.heartbeat()
             if status and status["cluster_version"] != self.current_version:

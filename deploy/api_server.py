@@ -132,8 +132,20 @@ def create_app(engine, tokenizer):
         except HTTPException:
             lock.release()
             raise
+        except (ConnectionError, BrokenPipeError, OSError) as e:
+            lock.release()
+            raise HTTPException(
+                status_code=503,
+                detail=f"A node disconnected during inference. The cluster is reconfiguring. Retry in a few seconds. ({e})"
+            )
         except RuntimeError as e:
             lock.release()
+            err = str(e).lower()
+            if any(x in err for x in ["connection", "timed out", "broken pipe", "reset"]):
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"A node disconnected during inference. The cluster is reconfiguring. Retry in a few seconds. ({e})"
+                )
             raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
         except Exception as e:
             lock.release()

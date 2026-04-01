@@ -155,10 +155,10 @@ def create_coordinator_app(min_nodes=2, heartbeat_timeout=60, model=None, device
     state.model = model
     state.device = device
 
-    # Background heartbeat checker
+    # Background heartbeat checker (fast polling for quicker dead-node detection)
     def heartbeat_monitor():
         while True:
-            time.sleep(15)
+            time.sleep(5)
             state.check_heartbeats()
 
     monitor = threading.Thread(target=heartbeat_monitor, daemon=True)
