@@ -127,7 +127,7 @@ class Communication_Dynamic:
                  forward_input_shapes=None, feedback_shape=None,
                  backward_input_shapes=None,
                  dtype=None, device=None, input_tensors=None,
-                 peer_addresses=None, listen_port=29500):
+                 peer_addresses=None, peer_ips=None, listen_port=29500):
         self.rank = rank
         self.world_size = world_size
         self.mode = mode
@@ -138,6 +138,7 @@ class Communication_Dynamic:
         self.backward_input_shapes = backward_input_shapes
         self.feedback_shape = feedback_shape
         self.listen_port = listen_port
+        self.peer_ips = peer_ips or {}  # rank -> IP address
 
         if node_type is not None:
             self.node_type = node_type
@@ -203,20 +204,20 @@ class Communication_Dynamic:
         # Connect to next rank (if not LEAF)
         if self.rank < self.world_size - 1:
             def connect_next():
-                master_addr = os.environ.get("MASTER_ADDR", "localhost")
-                target_port = self.listen_port + self.rank + 1
+                next_rank = self.rank + 1
+                target_host = self.peer_ips.get(next_rank, os.environ.get("MASTER_ADDR", "localhost"))
+                target_port = self.listen_port + next_rank
                 for attempt in range(60):
                     try:
                         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.connect((master_addr, target_port))
-                        # Send our rank
+                        sock.connect((target_host, target_port))
                         sock.sendall(struct.pack(">I", self.rank))
-                        self.peers[self.rank + 1] = sock
-                        print(f"[dynamic-comm] Rank {self.rank} connected to rank {self.rank + 1}")
+                        self.peers[next_rank] = sock
+                        print(f"[dynamic-comm] Rank {self.rank} connected to rank {next_rank} ({target_host}:{target_port})")
                         return
                     except ConnectionRefusedError:
                         time.sleep(2)
-                raise RuntimeError(f"Could not connect to rank {self.rank + 1}")
+                raise RuntimeError(f"Could not connect to rank {next_rank} at {target_host}:{target_port}")
             t = threading.Thread(target=connect_next, daemon=True)
             t.start()
             threads.append(t)
@@ -238,18 +239,18 @@ class Communication_Dynamic:
         else:
             # Non-root connects to root for metadata
             def connect_metadata():
-                master_addr = os.environ.get("MASTER_ADDR", "localhost")
+                root_addr = self.peer_ips.get(0, os.environ.get("MASTER_ADDR", "localhost"))
                 for attempt in range(60):
                     try:
                         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.connect((master_addr, self.listen_port))
+                        sock.connect((root_addr, self.listen_port))
                         sock.sendall(struct.pack(">I", self.rank))
                         self.peers["meta_root"] = sock
-                        print(f"[dynamic-comm] Rank {self.rank} metadata channel to root")
+                        print(f"[dynamic-comm] Rank {self.rank} metadata channel to root ({root_addr})")
                         return
                     except ConnectionRefusedError:
                         time.sleep(2)
-                raise RuntimeError("Could not connect metadata channel to root")
+                raise RuntimeError(f"Could not connect metadata channel to root at {root_addr}")
             t = threading.Thread(target=connect_metadata, daemon=True)
             t.start()
             threads.append(t)

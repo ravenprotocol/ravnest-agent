@@ -168,6 +168,12 @@ def create_coordinator_app(min_nodes=2, heartbeat_timeout=60, model=None, device
             sorted_nodes = sorted(state.nodes.keys())
             master_id = sorted_nodes[0]
 
+            # Build peer map: rank -> node_id (IP)
+            peers = {
+                state.nodes[nid]["rank"]: nid
+                for nid in sorted_nodes
+            }
+
             return {
                 "rank": info["rank"],
                 "world_size": len(state.nodes),
@@ -176,6 +182,7 @@ def create_coordinator_app(min_nodes=2, heartbeat_timeout=60, model=None, device
                 "cluster_version": state.cluster_version,
                 "model": state.model,
                 "device": state.device,
+                "peers": peers,
             }
 
     return app

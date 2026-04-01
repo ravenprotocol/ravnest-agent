@@ -62,10 +62,11 @@ class Node():
 
     def __init__(self, model=None, optimizer=None, optimizer_params={}, update_frequency = 1, batch_size=None, seq_length=None, cluster_length=None,
                  dist_timeout=10, reduce_factor=None, labels=None, device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'), dtype='float16',
-                 mode=NodeModes.TRAIN, loss_filename='losses.txt', recompute=False, backend = 'grpc', compression=False, average_optim=False, proportions=None, **kwargs):
+                 mode=NodeModes.TRAIN, loss_filename='losses.txt', recompute=False, backend = 'grpc', compression=False, average_optim=False, proportions=None, peer_ips=None, **kwargs):
 
         self.backend = backend
         self.proportions = proportions
+        self.peer_ips = peer_ips
         self.loss_filename = loss_filename
 
         self.reset()
@@ -163,7 +164,8 @@ class Node():
                                                     forward_input_shapes=self.forward_input_shapes,
                                                     backward_input_shapes=self.backward_input_shapes,
                                                     feedback_shape=self.feedback_shape,
-                                                    dtype=self.dtype, device=self.device)
+                                                    dtype=self.dtype, device=self.device,
+                                                    peer_ips=self.peer_ips)
         else:
 
             self.comm_session = Communication_Torch(input_tensors=self.input_tensors,
