@@ -41,6 +41,7 @@ inference = [
     "uvicorn",
     "transformers",
     "accelerate",
+    "requests",
 ]
 gpu = [
     "nvidia-ml-py3",

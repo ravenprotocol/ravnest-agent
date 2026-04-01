@@ -346,6 +346,57 @@ def cmd_status(args):
     )
 
 
+def cmd_coordinator(args):
+    """Run the cluster coordinator."""
+    import importlib.util
+    # Direct import to avoid triggering ravnest.__init__ (which needs torch)
+    cli_dir = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location("coordinator", os.path.join(cli_dir, "coordinator.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    create_coordinator_app = mod.create_coordinator_app
+    import uvicorn
+
+    local_ip = get_local_ip()
+    print(f"Ravnest Cluster Coordinator")
+    print(f"  This IP:    {local_ip}")
+    print(f"  Port:       {args.port}")
+    print(f"  Min nodes:  {args.min_nodes}")
+    print(f"  Heartbeat:  {args.heartbeat_timeout}s timeout")
+    if args.model:
+        print(f"  Model:      {args.model}")
+    print()
+    print(f"Workers connect with:")
+    print(f"  ravnest worker --coordinator http://{local_ip}:{args.port}")
+    print()
+
+    app = create_coordinator_app(
+        min_nodes=args.min_nodes,
+        heartbeat_timeout=args.heartbeat_timeout,
+        model=args.model,
+        device=args.device,
+    )
+    uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
+
+
+def cmd_worker(args):
+    """Run as a worker managed by a coordinator."""
+    try:
+        from .worker import Worker
+    except ImportError:
+        from ravnest.worker import Worker
+
+    hw = detect_hardware()
+    device = args.device or hw["device"]
+
+    worker = Worker(
+        coordinator_url=args.coordinator,
+        model=args.model,
+        device=device,
+    )
+    worker.run()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="ravnest",
@@ -393,6 +444,32 @@ def main():
     join_parser.add_argument("--auto-profile", action="store_true", default=False,
                             help="Auto-detect hardware and compute proportions (must match root)")
 
+    # ravnest coordinator
+    coord_parser = subparsers.add_parser("coordinator",
+                                         help="Run cluster coordinator (dynamic node management)")
+    coord_parser.add_argument("--port", "-p", type=int, default=8080,
+                             help="Coordinator port (default: 8080)")
+    coord_parser.add_argument("--min-nodes", type=int, default=2,
+                             help="Minimum nodes before cluster is ready (default: 2)")
+    coord_parser.add_argument("--heartbeat-timeout", type=int, default=60,
+                             help="Seconds before a node is considered dead (default: 60)")
+    coord_parser.add_argument("--model", "-m", type=str, default=None,
+                             help="HuggingFace model ID for the cluster")
+    coord_parser.add_argument("--device", "-d", type=str, default=None,
+                             choices=["cpu", "cuda"],
+                             help="Device type for inference nodes")
+
+    # ravnest worker
+    worker_parser = subparsers.add_parser("worker",
+                                          help="Join cluster via coordinator (auto-managed)")
+    worker_parser.add_argument("--coordinator", "-c", type=str, required=True,
+                              help="Coordinator URL (e.g. http://192.168.1.100:8080)")
+    worker_parser.add_argument("--model", "-m", type=str, default=None,
+                              help="HuggingFace model ID (overrides coordinator)")
+    worker_parser.add_argument("--device", "-d", type=str, default=None,
+                              choices=["cpu", "cuda"],
+                              help="Device type (default: auto-detect)")
+
     # ravnest down / status
     subparsers.add_parser("down", help="Stop distributed inference")
     subparsers.add_parser("status", help="Show running containers")
@@ -407,6 +484,10 @@ def main():
         cmd_up(args)
     elif args.command == "join":
         cmd_join(args)
+    elif args.command == "coordinator":
+        cmd_coordinator(args)
+    elif args.command == "worker":
+        cmd_worker(args)
     elif args.command == "down":
         cmd_down(args)
     elif args.command == "status":
