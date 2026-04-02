@@ -397,6 +397,195 @@ def cmd_worker(args):
     worker.run()
 
 
+SUPPORTED_MODELS = [
+    {"id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "arch": "Llama", "params": "1.1B", "size": "~2GB", "min_ram": "4GB", "gated": False, "note": "Good for CPU testing"},
+    {"id": "meta-llama/Llama-3.2-1B", "arch": "Llama", "params": "1B", "size": "~2GB", "min_ram": "4GB", "gated": True, "note": ""},
+    {"id": "meta-llama/Llama-3.2-3B", "arch": "Llama", "params": "3B", "size": "~6GB", "min_ram": "8GB", "gated": True, "note": "Default for GPU"},
+    {"id": "meta-llama/Llama-3.1-8B", "arch": "Llama", "params": "8B", "size": "~16GB", "min_ram": "20GB", "gated": True, "note": ""},
+    {"id": "meta-llama/Llama-3.1-8B-Instruct", "arch": "Llama", "params": "8B", "size": "~16GB", "min_ram": "20GB", "gated": True, "note": "Chat-tuned"},
+    {"id": "mistralai/Mistral-7B-v0.1", "arch": "Mistral", "params": "7B", "size": "~14GB", "min_ram": "18GB", "gated": False, "note": ""},
+    {"id": "mistralai/Mistral-7B-Instruct-v0.3", "arch": "Mistral", "params": "7B", "size": "~14GB", "min_ram": "18GB", "gated": False, "note": "Chat-tuned"},
+    {"id": "microsoft/Phi-3-mini-4k-instruct", "arch": "Phi-3", "params": "3.8B", "size": "~8GB", "min_ram": "10GB", "gated": False, "note": ""},
+    {"id": "microsoft/phi-2", "arch": "Phi", "params": "2.7B", "size": "~6GB", "min_ram": "8GB", "gated": False, "note": ""},
+    {"id": "Qwen/Qwen2-1.5B", "arch": "Qwen-2", "params": "1.5B", "size": "~3GB", "min_ram": "6GB", "gated": False, "note": ""},
+    {"id": "Qwen/Qwen2-7B", "arch": "Qwen-2", "params": "7B", "size": "~14GB", "min_ram": "18GB", "gated": False, "note": ""},
+]
+
+
+def cmd_models(args):
+    """List supported models."""
+    print("Supported Models for Ravnest Distributed Inference")
+    print("=" * 90)
+    print(f"{'Model':<45} {'Arch':<10} {'Params':<8} {'Size':<8} {'Min RAM':<8} {'Note'}")
+    print("-" * 90)
+    for m in SUPPORTED_MODELS:
+        gated = " [gated]" if m["gated"] else ""
+        note = m["note"] + gated
+        print(f"{m['id']:<45} {m['arch']:<10} {m['params']:<8} {m['size']:<8} {m['min_ram']:<8} {note}")
+    print()
+    print("Gated models require a HuggingFace account + access request.")
+    print("Use: ravnest pull <model-id> to pre-download a model.")
+
+
+def cmd_pull(args):
+    """Pre-download a model from HuggingFace."""
+    model_id = args.model
+    cache_dir = os.environ.get("MODEL_CACHE", os.path.expanduser("~/.cache/ravnest/models"))
+    os.makedirs(cache_dir, exist_ok=True)
+
+    print(f"Downloading {model_id} to {cache_dir}...")
+    print("(This may take a while for large models)")
+    print()
+
+    try:
+        subprocess.run(
+            [sys.executable, "-c", f"""
+import os
+os.environ['HF_HOME'] = '{cache_dir}'
+from transformers import AutoModelForCausalLM, AutoTokenizer
+print('Downloading tokenizer...')
+AutoTokenizer.from_pretrained('{model_id}', cache_dir='{cache_dir}')
+print('Downloading model...')
+AutoModelForCausalLM.from_pretrained('{model_id}', cache_dir='{cache_dir}')
+print('Done!')
+"""],
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        print("Download failed. Check your network connection and HuggingFace access.")
+        sys.exit(1)
+    except FileNotFoundError:
+        print("Python not found. Install transformers: pip install transformers")
+        sys.exit(1)
+
+    print()
+    print(f"Model cached at: {cache_dir}")
+    print(f"Use: ravnest up --model {model_id}")
+
+
+def cmd_bench(args):
+    """Benchmark inference performance against a running API."""
+    import json as json_mod
+
+    url = args.url
+    tokens = args.tokens
+    runs = args.runs
+    model = args.model or "ravnest"
+
+    try:
+        import requests as req
+    except ImportError:
+        print("Install requests: pip install requests")
+        sys.exit(1)
+
+    # Check API is reachable
+    try:
+        resp = req.get(f"{url}/health", timeout=5)
+        if resp.status_code != 200:
+            print(f"API at {url} returned {resp.status_code}")
+            sys.exit(1)
+    except req.ConnectionError:
+        print(f"Cannot reach API at {url}. Is ravnest running?")
+        sys.exit(1)
+
+    print(f"Ravnest Benchmark")
+    print(f"  API:        {url}")
+    print(f"  Max tokens: {tokens}")
+    print(f"  Runs:       {runs}")
+    print()
+
+    import time as time_mod
+
+    prompts = [
+        "Explain what distributed computing means in one sentence.",
+        "Write a haiku about artificial intelligence.",
+        "What is the capital of France?",
+    ]
+
+    results = []
+    for i in range(runs):
+        prompt = prompts[i % len(prompts)]
+        print(f"Run {i+1}/{runs}: \"{prompt[:50]}...\"")
+
+        start = time_mod.time()
+        try:
+            resp = req.post(
+                f"{url}/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": tokens,
+                },
+                timeout=600,
+            )
+            elapsed = time_mod.time() - start
+            data = resp.json()
+
+            if resp.status_code != 200:
+                print(f"  Error: HTTP {resp.status_code}")
+                continue
+
+            usage = data.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+            content = data["choices"][0]["message"]["content"]
+
+            tokens_per_sec = completion_tokens / elapsed if elapsed > 0 else 0
+            time_per_token = (elapsed / completion_tokens * 1000) if completion_tokens > 0 else 0
+
+            results.append({
+                "elapsed": elapsed,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "tokens_per_sec": tokens_per_sec,
+                "time_per_token_ms": time_per_token,
+            })
+
+            print(f"  {completion_tokens} tokens in {elapsed:.2f}s "
+                  f"({tokens_per_sec:.2f} tok/s, {time_per_token:.0f}ms/tok)")
+            print(f"  Output: \"{content[:60]}...\"")
+
+        except Exception as e:
+            print(f"  Error: {e}")
+
+        print()
+
+    if not results:
+        print("No successful runs.")
+        sys.exit(1)
+
+    # Summary
+    avg_tps = sum(r["tokens_per_sec"] for r in results) / len(results)
+    avg_tpt = sum(r["time_per_token_ms"] for r in results) / len(results)
+    avg_elapsed = sum(r["elapsed"] for r in results) / len(results)
+    total_tokens = sum(r["completion_tokens"] for r in results)
+
+    print("=" * 50)
+    print(f"BENCHMARK RESULTS ({len(results)} runs)")
+    print(f"  Avg tokens/sec:     {avg_tps:.2f}")
+    print(f"  Avg ms/token:       {avg_tpt:.0f}")
+    print(f"  Avg response time:  {avg_elapsed:.2f}s")
+    print(f"  Total tokens:       {total_tokens}")
+    print("=" * 50)
+
+    # Save results
+    results_dir = os.path.expanduser("~/.cache/ravnest/benchmarks")
+    os.makedirs(results_dir, exist_ok=True)
+    import time as time_mod2
+    results_file = os.path.join(results_dir, f"bench-{int(time_mod2.time())}.json")
+    with open(results_file, "w") as f:
+        json_mod.dump({
+            "url": url,
+            "max_tokens": tokens,
+            "runs": len(results),
+            "avg_tokens_per_sec": round(avg_tps, 2),
+            "avg_ms_per_token": round(avg_tpt, 0),
+            "avg_response_time": round(avg_elapsed, 2),
+            "results": results,
+        }, f, indent=2)
+    print(f"Results saved to: {results_file}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="ravnest",
@@ -470,6 +659,24 @@ def main():
                               choices=["cpu", "cuda"],
                               help="Device type (default: auto-detect)")
 
+    # ravnest models
+    subparsers.add_parser("models", help="List supported models with sizes and requirements")
+
+    # ravnest pull
+    pull_parser = subparsers.add_parser("pull", help="Pre-download a model for offline use")
+    pull_parser.add_argument("model", type=str, help="HuggingFace model ID")
+
+    # ravnest bench
+    bench_parser = subparsers.add_parser("bench", help="Benchmark inference performance")
+    bench_parser.add_argument("--model", "-m", type=str, default=None,
+                             help="HuggingFace model ID (default: TinyLlama for CPU)")
+    bench_parser.add_argument("--tokens", "-t", type=int, default=20,
+                             help="Number of tokens to generate (default: 20)")
+    bench_parser.add_argument("--runs", "-r", type=int, default=3,
+                             help="Number of runs to average (default: 3)")
+    bench_parser.add_argument("--url", type=str, default="http://localhost:8000",
+                             help="API URL to benchmark (default: http://localhost:8000)")
+
     # ravnest down / status
     subparsers.add_parser("down", help="Stop distributed inference")
     subparsers.add_parser("status", help="Show running containers")
@@ -488,6 +695,12 @@ def main():
         cmd_coordinator(args)
     elif args.command == "worker":
         cmd_worker(args)
+    elif args.command == "models":
+        cmd_models(args)
+    elif args.command == "pull":
+        cmd_pull(args)
+    elif args.command == "bench":
+        cmd_bench(args)
     elif args.command == "down":
         cmd_down(args)
     elif args.command == "status":
