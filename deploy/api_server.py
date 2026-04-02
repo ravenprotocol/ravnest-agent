@@ -130,26 +130,15 @@ def create_app(engine, tokenizer):
             else:
                 return _non_stream_response(request, prompt, prompt_token_count)
         except HTTPException:
-            lock.release()
+            # Lock already released by _non_stream_response or _stream_response
             raise
-        except (ConnectionError, BrokenPipeError, OSError) as e:
-            lock.release()
-            raise HTTPException(
-                status_code=503,
-                detail=f"A node disconnected during inference. The cluster is reconfiguring. Retry in a few seconds. ({e})"
-            )
-        except RuntimeError as e:
-            lock.release()
-            err = str(e).lower()
-            if any(x in err for x in ["connection", "timed out", "broken pipe", "reset"]):
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"A node disconnected during inference. The cluster is reconfiguring. Retry in a few seconds. ({e})"
-                )
-            raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
-        except Exception as e:
-            lock.release()
-            raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+        except Exception:
+            # Safety net: release lock if somehow not released
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
+            raise
 
     def _non_stream_response(request, prompt, prompt_token_count):
         try:
@@ -191,6 +180,21 @@ def create_app(engine, tokenizer):
                     total_tokens=prompt_token_count + completion_tokens,
                 ),
             )
+        except (ConnectionError, BrokenPipeError, OSError) as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"A node disconnected. Retry in a few seconds. ({e})"
+            )
+        except RuntimeError as e:
+            err = str(e).lower()
+            if any(x in err for x in ["connection", "timed out", "broken pipe", "reset"]):
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"A node disconnected. Retry in a few seconds. ({e})"
+                )
+            raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
         finally:
             lock.release()
 
