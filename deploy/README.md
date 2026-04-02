@@ -13,7 +13,18 @@ ravnest status
 ravnest down
 ```
 
-**Using Docker Compose directly:**
+**Using pre-built images** (no build step):
+```bash
+cd deploy
+
+# GPU
+docker compose -f docker-compose.hub.yml up
+
+# CPU
+docker compose -f docker-compose.hub-cpu.yml up
+```
+
+**Building from source:**
 ```bash
 cd deploy
 
