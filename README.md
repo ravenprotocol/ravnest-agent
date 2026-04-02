@@ -18,7 +18,7 @@ Ravnest introduces a novel asynchronous parallel training approach that combines
 
 - **Distributed Training** across heterogeneous consumer-grade PCs
 - **Distributed LLM Inference** with paged attention and pipeline parallelism
-- **Supported Models**: Llama (1B, 3B, 8B), Qwen-2
+- **Supported Models**: Llama, Mistral, Phi-3, Qwen-2
 - **Docker Compose** setup for multi-node inference with OpenAI-compatible API
 - **Dual backends**: gRPC for TCP, torch.distributed (Gloo/NCCL) for GPU clusters
 - **KV Cache** with paged attention for memory-efficient inference

@@ -134,9 +134,10 @@ Works with any tool that speaks the OpenAI protocol. Point it at `http://localho
 ### Supported models
 
 Any model with a Ravnest split spec:
-- Llama (1B, 3B, 8B, 8B-Instruct)
-- Qwen-2
-- TinyLlama (good for CPU testing)
+- **Llama** — Llama-3.2 (1B, 3B), Llama-3.1 (8B, 8B-Instruct), TinyLlama
+- **Mistral** — Mistral-7B, Ministral-3B
+- **Phi** — Phi-3-mini (3.8B), Phi-3.5, Phi-2
+- **Qwen-2** — Qwen2-1.5B, Qwen2-7B
 
 ## Dynamic Cluster (Coordinator Mode)
 
