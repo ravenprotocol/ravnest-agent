@@ -116,6 +116,7 @@ services:
       - NODE_ROLE=root
       - RAVNEST_DEVICE=$DEVICE
       - RAVNEST_BACKEND=dynamic
+      - RAVNEST_PEERS=node-0,node-1
       - PYTHONUNBUFFERED=1
     volumes:
       - model_cache:/app/model_cache
@@ -135,6 +136,7 @@ $COMPOSE_EXTRA
       - NODE_ROLE=leaf
       - RAVNEST_DEVICE=$DEVICE
       - RAVNEST_BACKEND=dynamic
+      - RAVNEST_PEERS=node-0,node-1
       - PYTHONUNBUFFERED=1
     volumes:
       - model_cache:/app/model_cache

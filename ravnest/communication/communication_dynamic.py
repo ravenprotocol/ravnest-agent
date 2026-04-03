@@ -138,7 +138,16 @@ class Communication_Dynamic:
         self.backward_input_shapes = backward_input_shapes
         self.feedback_shape = feedback_shape
         self.listen_port = listen_port
-        self.peer_ips = peer_ips or {}  # rank -> IP address
+        # Build peer_ips from explicit param, env var, or empty
+        if peer_ips:
+            self.peer_ips = peer_ips
+        else:
+            # Parse RAVNEST_PEERS env: "host0,host1,host2" -> {0: host0, 1: host1, ...}
+            peers_env = os.environ.get("RAVNEST_PEERS", "")
+            if peers_env:
+                self.peer_ips = {i: h for i, h in enumerate(peers_env.split(","))}
+            else:
+                self.peer_ips = {}
 
         if node_type is not None:
             self.node_type = node_type
