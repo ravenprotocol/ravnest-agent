@@ -32,7 +32,10 @@ def setup_gloo_timeout():
 def create_node_and_engine():
     setup_gloo_timeout()
     model_name = os.environ.get("MODEL_NAME", "meta-llama/Llama-3.2-3B")
-    cache_dir = "/app/model_cache"
+    # Cache dir: env override > Docker /app path > user home (for native runs)
+    default_cache = "/app/model_cache" if os.path.isdir("/app") else os.path.expanduser("~/.cache/ravnest/models")
+    cache_dir = os.environ.get("MODEL_CACHE_DIR", default_cache)
+    os.makedirs(cache_dir, exist_ok=True)
     role = os.environ.get("NODE_ROLE", "root")
     rank = int(os.environ.get("RANK", "0"))
     def _default_device():
