@@ -88,7 +88,7 @@ class Node():
         self.device = device
         self.compression = compression
 
-        if not next(self.model.parameters()).is_cuda:
+        if next(self.model.parameters()).device != torch.device(device):
             self.model.to(device)
 
         self.load_forward_buffer = self.manager.list()

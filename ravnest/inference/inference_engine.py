@@ -81,7 +81,7 @@ class InferenceEngine():
             batch_output_logits = torch.empty(
                 (bs, self.comm_session.forward_input_shapes[0][1], self.node.model.config.vocab_size),#self.comm_session.forward_input_shapes[0][2]),
                 dtype=self.comm_session.dtype,
-                device=torch.cuda.current_device(),
+                device=self.node.device,
             )
         for mb_id, mbs in enumerate(mbs_list):
             # if self.node_type = NodeTypes.ROOT:

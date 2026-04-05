@@ -42,6 +42,16 @@ def get_hardware_info():
             info["name"] = props.name
             info["memory_gb"] = round(props.total_mem / (1024**3), 1)
             return info
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            # Apple Silicon: unified memory, report system RAM as proxy
+            info["type"] = "mps"
+            info["name"] = "Apple Silicon GPU"
+            try:
+                import psutil
+                info["memory_gb"] = round(psutil.virtual_memory().total / (1024**3), 1)
+            except ImportError:
+                info["memory_gb"] = 8.0
+            return info
     except ImportError:
         pass
 
@@ -67,7 +77,9 @@ def compute_proportions(hardware_list):
     for hw in hardware_list:
         mem = hw["memory_gb"]
         if hw["type"] == "cuda":
-            weights.append(mem * 10)  # GPU memory is worth more
+            weights.append(mem * 10)  # discrete GPU ~10x CPU
+        elif hw["type"] == "mps":
+            weights.append(mem * 4)   # Apple Silicon GPU ~4x CPU (unified memory)
         else:
             weights.append(mem)
 

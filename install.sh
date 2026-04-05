@@ -18,26 +18,32 @@ echo -e "${BOLD}  ╚═══════════════════�
 echo ""
 
 # --- Check Docker ---
+OS="$(uname -s)"
 if ! command -v docker &> /dev/null; then
-    echo -e "${RED}Docker not found.${NC}"
-    echo ""
-    OS="$(uname -s)"
     if [ "$OS" = "Darwin" ]; then
-        echo "Install Docker Desktop for Mac:"
-        echo -e "  ${BOLD}https://www.docker.com/products/docker-desktop/${NC}"
+        echo -e "${YELLOW}Docker not found.${NC}"
         echo ""
-        echo "Or with Homebrew:"
-        echo -e "  ${BOLD}brew install --cask docker${NC}"
+        echo "On macOS you have two options:"
         echo ""
-        echo "After installing, open Docker Desktop once to start the daemon,"
-        echo "then re-run this script."
+        echo -e "  ${BOLD}1) Native mode (uses Apple Silicon GPU via MPS) — recommended${NC}"
+        echo "     Needs Python 3.11+ and pip. No Docker required."
+        echo -e "     ${BOLD}git clone https://github.com/ravenprotocol/ravnest-agent.git${NC}"
+        echo -e "     ${BOLD}cd ravnest-agent && pip install -e '.[inference]'${NC}"
+        echo -e "     ${BOLD}ravnest native${NC}"
+        echo ""
+        echo -e "  ${BOLD}2) Docker mode (CPU only — Docker VM can't access Mac GPU)${NC}"
+        echo -e "     ${BOLD}brew install --cask docker${NC}  (then open Docker Desktop once)"
+        echo "     Then re-run this script."
+        exit 1
     else
+        echo -e "${RED}Docker not found.${NC}"
+        echo ""
         echo "Install Docker first:"
         echo -e "  ${BOLD}curl -fsSL https://get.docker.com | sh${NC}"
         echo ""
         echo "Then re-run this script."
+        exit 1
     fi
-    exit 1
 fi
 
 if ! docker info &> /dev/null 2>&1; then

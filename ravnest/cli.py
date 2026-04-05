@@ -48,6 +48,17 @@ def detect_hardware():
                     "vram_gb": round(props.total_mem / (1024**3), 1),
                 })
             return {"device": "cuda", "gpu_count": gpu_count, "gpus": gpus}
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            try:
+                import psutil
+                mem_gb = round(psutil.virtual_memory().total / (1024**3), 1)
+            except ImportError:
+                mem_gb = 8.0
+            return {
+                "device": "mps",
+                "gpu_count": 1,
+                "gpus": [{"name": "Apple Silicon GPU", "vram_gb": mem_gb}],
+            }
     except ImportError:
         pass
 
@@ -379,6 +390,81 @@ def cmd_coordinator(args):
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
 
 
+def cmd_native(args):
+    """Launch a 2-node cluster as native processes on this machine (no Docker).
+
+    Primarily for platforms where Docker can't access the local GPU
+    (macOS / Apple Silicon MPS).
+    """
+    hw = detect_hardware()
+    device = args.device or hw["device"]
+    model = args.model or "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    port = args.port
+    nodes = args.nodes
+
+    # Find entrypoint.py: either in-repo (deploy/entrypoint.py) or shipped with package
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    entrypoint = os.path.join(repo_root, "deploy", "entrypoint.py")
+    if not os.path.exists(entrypoint):
+        print(f"Error: cannot find deploy/entrypoint.py. Run from a ravnest checkout.")
+        sys.exit(1)
+
+    print(f"Ravnest Native (no Docker)")
+    print(f"  Model:   {model}")
+    print(f"  Device:  {device}")
+    print(f"  Nodes:   {nodes}")
+    print(f"  API:     http://localhost:{port}")
+    print()
+
+    # Spawn nodes as subprocesses on localhost
+    procs = []
+    peers = ",".join(["127.0.0.1"] * nodes)
+    try:
+        for rank in range(nodes):
+            is_root = rank == 0
+            env = os.environ.copy()
+            env.update({
+                "RANK": str(rank),
+                "WORLD_SIZE": str(nodes),
+                "MASTER_ADDR": "127.0.0.1",
+                "MASTER_PORT": "29500",
+                "MODEL_NAME": model,
+                "NODE_ROLE": "root" if is_root else "leaf",
+                "RAVNEST_DEVICE": device,
+                "RAVNEST_BACKEND": "dynamic",
+                "RAVNEST_PEERS": peers,
+                "PYTHONUNBUFFERED": "1",
+                "PYTHONPATH": repo_root + os.pathsep + env.get("PYTHONPATH", ""),
+            })
+            if is_root:
+                env["RAVNEST_API_PORT"] = str(port)
+            if args.api_key:
+                env["RAVNEST_API_KEY"] = args.api_key
+
+            print(f"Starting node-{rank} ({'root+API' if is_root else 'leaf'})...")
+            p = subprocess.Popen([sys.executable, entrypoint], env=env)
+            procs.append(p)
+
+        # Wait for any process to exit
+        while True:
+            for p in procs:
+                if p.poll() is not None:
+                    print(f"\nnode exited with code {p.returncode}, shutting down cluster")
+                    raise KeyboardInterrupt
+            import time as _t
+            _t.sleep(1)
+    except KeyboardInterrupt:
+        print("\nStopping nodes...")
+        for p in procs:
+            if p.poll() is None:
+                p.terminate()
+        for p in procs:
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+
+
 def cmd_worker(args):
     """Run as a worker managed by a coordinator."""
     try:
@@ -600,7 +686,7 @@ def main():
     up_parser.add_argument("--nodes", "-n", type=int, default=2,
                           help="Number of pipeline stages on this machine (default: 2)")
     up_parser.add_argument("--device", "-d", type=str, default=None,
-                          choices=["cpu", "cuda"],
+                          choices=["cpu", "cuda", "mps"],
                           help="Device type (default: auto-detect)")
     up_parser.add_argument("--port", "-p", type=int, default=8000,
                           help="API port (default: 8000)")
@@ -677,6 +763,23 @@ def main():
     bench_parser.add_argument("--url", type=str, default="http://localhost:8000",
                              help="API URL to benchmark (default: http://localhost:8000)")
 
+    # ravnest native (no Docker — for Apple Silicon / MPS)
+    native_parser = subparsers.add_parser(
+        "native",
+        help="Run a 2-node cluster natively (no Docker). Needed for macOS/MPS GPU.",
+    )
+    native_parser.add_argument("--model", "-m", type=str, default=None,
+                               help="HuggingFace model ID (default: TinyLlama)")
+    native_parser.add_argument("--nodes", "-n", type=int, default=2,
+                               help="Pipeline stages on this machine (default: 2)")
+    native_parser.add_argument("--device", "-d", type=str, default=None,
+                               choices=["cpu", "cuda", "mps"],
+                               help="Device type (default: auto-detect, prefers mps on Mac)")
+    native_parser.add_argument("--port", "-p", type=int, default=8000,
+                               help="API port (default: 8000)")
+    native_parser.add_argument("--api-key", "-k", type=str, default=None,
+                               help="Bearer token for API auth (default: none)")
+
     # ravnest down / status
     subparsers.add_parser("down", help="Stop distributed inference")
     subparsers.add_parser("status", help="Show running containers")
@@ -695,6 +798,8 @@ def main():
         cmd_coordinator(args)
     elif args.command == "worker":
         cmd_worker(args)
+    elif args.command == "native":
+        cmd_native(args)
     elif args.command == "models":
         cmd_models(args)
     elif args.command == "pull":

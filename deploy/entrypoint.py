@@ -11,8 +11,12 @@ import time
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# Add project root to path
-sys.path.insert(0, "/app")
+# Add project root to path (Docker uses /app; native run uses the repo dir)
+if os.path.isdir("/app") and os.path.isdir("/app/ravnest"):
+    sys.path.insert(0, "/app")
+else:
+    _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, _repo_root)
 
 from ravnest.lazy_init.lazy_context import LazyInitContext
 from ravnest import Node
@@ -31,9 +35,16 @@ def create_node_and_engine():
     cache_dir = "/app/model_cache"
     role = os.environ.get("NODE_ROLE", "root")
     rank = int(os.environ.get("RANK", "0"))
-    device_str = os.environ.get("RAVNEST_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
+    def _default_device():
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    device_str = os.environ.get("RAVNEST_DEVICE", _default_device())
     device = torch.device(device_str)
     use_cpu = device_str == "cpu"
+    use_mps = device_str == "mps"
 
     print(f"[node-{rank}] Starting as {role}, model={model_name}, device={device_str}")
 
@@ -43,19 +54,21 @@ def create_node_and_engine():
 
     # Load model with lazy init (both nodes need full checkpoint to determine their layers)
     print(f"[node-{rank}] Loading model with lazy init...")
+    # MPS supports fp16 but load on CPU first, Node.__init__ moves it.
     dtype = torch.float32 if use_cpu else torch.float16
+    device_map = "cpu" if (use_cpu or use_mps) else "cuda"
     init_ctx = LazyInitContext()
     with init_ctx:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=dtype,
-            device_map="cpu" if use_cpu else "cuda",
+            device_map=device_map,
             cache_dir=cache_dir,
         )
     model.eval()
 
-    # Use longer timeout for CPU (inference is slow)
-    timeout_minutes = 30 if use_cpu else 10
+    # Use longer timeout for CPU/MPS (slower than discrete GPU)
+    timeout_minutes = 30 if (use_cpu or use_mps) else 10
 
     # Determine layer proportions
     proportions = None
@@ -80,7 +93,7 @@ def create_node_and_engine():
     node = Node(
         model=model,
         device=device,
-        dtype="float32" if use_cpu else "float16",
+        dtype="float32" if (use_cpu or use_mps) else "float16",
         batch_size=1,
         mode="inference",
         seq_length=5,
@@ -109,8 +122,9 @@ def run_root():
     app = create_app(engine, tokenizer)
 
     import uvicorn
-    print("[node-0] Starting API server on 0.0.0.0:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    api_port = int(os.environ.get("RAVNEST_API_PORT", "8000"))
+    print(f"[node-0] Starting API server on 0.0.0.0:{api_port}")
+    uvicorn.run(app, host="0.0.0.0", port=api_port, log_level="info")
 
 
 def run_leaf():
