@@ -400,7 +400,6 @@ def cmd_native(args):
     device = args.device or hw["device"]
     model = args.model or "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     port = args.port
-    nodes = args.nodes
 
     # Find entrypoint.py: either in-repo (deploy/entrypoint.py) or shipped with package
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -409,24 +408,45 @@ def cmd_native(args):
         print(f"Error: cannot find deploy/entrypoint.py. Run from a ravnest checkout.")
         sys.exit(1)
 
+    # Multi-machine mode: user passes --peers host1,host2,... and --rank R
+    # Single-machine mode: default, runs all ranks on 127.0.0.1
+    if args.peers:
+        peer_list = [h.strip() for h in args.peers.split(",")]
+        world_size = args.world_size or len(peer_list)
+        if len(peer_list) != world_size:
+            print(f"Error: --peers has {len(peer_list)} entries but --world-size is {world_size}")
+            sys.exit(1)
+        if args.rank is None:
+            print("Error: --peers requires --rank (which node am I in the peer list?)")
+            sys.exit(1)
+        ranks_to_run = [args.rank]
+    else:
+        world_size = args.world_size or args.nodes
+        peer_list = ["127.0.0.1"] * world_size
+        ranks_to_run = list(range(world_size))
+
+    peers = ",".join(peer_list)
+
     print(f"Ravnest Native (no Docker)")
-    print(f"  Model:   {model}")
-    print(f"  Device:  {device}")
-    print(f"  Nodes:   {nodes}")
-    print(f"  API:     http://localhost:{port}")
+    print(f"  Model:       {model}")
+    print(f"  Device:      {device}")
+    print(f"  World size:  {world_size}")
+    print(f"  Peers:       {peers}")
+    print(f"  Running:     rank(s) {ranks_to_run}")
+    if 0 in ranks_to_run:
+        print(f"  API:         http://localhost:{port}")
     print()
 
-    # Spawn nodes as subprocesses on localhost
+    # Spawn the requested rank(s) as subprocess(es)
     procs = []
-    peers = ",".join(["127.0.0.1"] * nodes)
     try:
-        for rank in range(nodes):
+        for rank in ranks_to_run:
             is_root = rank == 0
             env = os.environ.copy()
             env.update({
                 "RANK": str(rank),
-                "WORLD_SIZE": str(nodes),
-                "MASTER_ADDR": "127.0.0.1",
+                "WORLD_SIZE": str(world_size),
+                "MASTER_ADDR": peer_list[0],
                 "MASTER_PORT": "29500",
                 "MODEL_NAME": model,
                 "NODE_ROLE": "root" if is_root else "leaf",
@@ -441,7 +461,8 @@ def cmd_native(args):
             if args.api_key:
                 env["RAVNEST_API_KEY"] = args.api_key
 
-            print(f"Starting node-{rank} ({'root+API' if is_root else 'leaf'})...")
+            role_str = "root+API" if is_root else "leaf"
+            print(f"Starting node-{rank} ({role_str})...")
             p = subprocess.Popen([sys.executable, entrypoint], env=env)
             procs.append(p)
 
@@ -771,14 +792,23 @@ def main():
     native_parser.add_argument("--model", "-m", type=str, default=None,
                                help="HuggingFace model ID (default: TinyLlama)")
     native_parser.add_argument("--nodes", "-n", type=int, default=2,
-                               help="Pipeline stages on this machine (default: 2)")
+                               help="[single-machine] pipeline stages on this host (default: 2)")
     native_parser.add_argument("--device", "-d", type=str, default=None,
                                choices=["cpu", "cuda", "mps"],
                                help="Device type (default: auto-detect, prefers mps on Mac)")
     native_parser.add_argument("--port", "-p", type=int, default=8000,
-                               help="API port (default: 8000)")
+                               help="API port for rank 0 (default: 8000)")
     native_parser.add_argument("--api-key", "-k", type=str, default=None,
                                help="Bearer token for API auth (default: none)")
+    native_parser.add_argument("--peers", type=str, default=None,
+                               help="[multi-machine] comma-separated host list, "
+                                    "e.g. '192.168.1.5,192.168.1.10'. "
+                                    "Must match on all machines.")
+    native_parser.add_argument("--rank", type=int, default=None,
+                               help="[multi-machine] this machine's rank in --peers "
+                                    "(0 = root+API, N-1 = leaf)")
+    native_parser.add_argument("--world-size", type=int, default=None,
+                               help="[multi-machine] total nodes (default: len(peers))")
 
     # ravnest down / status
     subparsers.add_parser("down", help="Stop distributed inference")
