@@ -39,7 +39,7 @@ dependencies = [
 inference = [
     "fastapi",
     "uvicorn",
-    "transformers",
+    "transformers>=4.40,<4.51",  # >=4.51 evaluates torch.LongTensor | None at class-def time and breaks
     "accelerate",
     "requests",
 ]
