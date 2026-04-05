@@ -57,6 +57,35 @@ docker compose up --build                                    # GPU
 docker compose -f docker-compose.cpu.yml up --build          # CPU
 ```
 
+#### macOS / Apple Silicon (native, no Docker)
+
+Docker Desktop on Mac runs a Linux VM that can't access the host GPU,
+so Mac users should run Ravnest **natively** to use the Apple Silicon
+GPU via MPS. Install into an isolated virtual environment so it doesn't
+touch your system Python:
+
+```bash
+git clone https://github.com/ravenprotocol/ravnest-agent.git
+cd ravnest-agent
+
+python3 -m venv .venv
+source .venv/bin/activate         # run this each new shell session
+pip install -e '.[inference]'
+
+ravnest native                     # auto-detects MPS, starts 2 local nodes
+```
+
+Everything — PyTorch, transformers, Ravnest — installs into `.venv/`.
+To uninstall: `deactivate && rm -rf ravnest-agent`. To run again later:
+`cd ravnest-agent && source .venv/bin/activate && ravnest native`.
+
+> If `pip install` fails with **"externally-managed-environment"**, that's
+> macOS protecting your system Python — the `venv` step above is the
+> fix. Do **not** use `--break-system-packages` or `sudo pip`.
+
+Prefer [uv](https://github.com/astral-sh/uv)? Replace the venv lines with
+`uv venv && source .venv/bin/activate && uv pip install -e '.[inference]'`.
+
 Once running, send requests to the API:
 ```bash
 curl -X POST http://localhost:8000/v1/chat/completions \
