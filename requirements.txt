@@ -1,13 +1,13 @@
-grpcio==1.51.3
-grpcio-tools==1.51.3
+grpcio>=1.60
+grpcio-tools>=1.60
 numpy
-protobuf==4.24.4
-scikit_learn
+protobuf>=4.24
+scikit-learn
 torch
 torchvision
-# torchpippy==0.2.0  # Optional: needed for training-time model splitting via PiPPy. Install manually if needed.
+# torchpippy==0.2.0  # Optional: training-time model splitting via PiPPy. Install manually if needed.
 packaging
 psutil
-nvidia-ml-py3
+# nvidia-ml-py3  # GPU-only; in pyproject.toml's [gpu] extra so Mac installs work
 torchinfo
 datasets

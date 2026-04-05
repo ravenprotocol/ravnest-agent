@@ -24,10 +24,10 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "grpcio>=1.51.0",
-    "grpcio-tools>=1.51.0",
+    "grpcio>=1.60",
+    "grpcio-tools>=1.60",
     "numpy",
-    "protobuf>=4.24.0",
+    "protobuf>=4.24",
     "scikit-learn",
     "torch",
     "packaging",
