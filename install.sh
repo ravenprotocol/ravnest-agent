@@ -21,10 +21,22 @@ echo ""
 if ! command -v docker &> /dev/null; then
     echo -e "${RED}Docker not found.${NC}"
     echo ""
-    echo "Install Docker first:"
-    echo -e "  ${BOLD}curl -fsSL https://get.docker.com | sh${NC}"
-    echo ""
-    echo "Then re-run this script."
+    OS="$(uname -s)"
+    if [ "$OS" = "Darwin" ]; then
+        echo "Install Docker Desktop for Mac:"
+        echo -e "  ${BOLD}https://www.docker.com/products/docker-desktop/${NC}"
+        echo ""
+        echo "Or with Homebrew:"
+        echo -e "  ${BOLD}brew install --cask docker${NC}"
+        echo ""
+        echo "After installing, open Docker Desktop once to start the daemon,"
+        echo "then re-run this script."
+    else
+        echo "Install Docker first:"
+        echo -e "  ${BOLD}curl -fsSL https://get.docker.com | sh${NC}"
+        echo ""
+        echo "Then re-run this script."
+    fi
     exit 1
 fi
 
