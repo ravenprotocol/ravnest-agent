@@ -62,14 +62,24 @@ docker compose -f docker-compose.cpu.yml up --build          # CPU
 Docker Desktop on Mac runs a Linux VM that can't access the host GPU,
 so Mac users should run Ravnest **natively** to use the Apple Silicon
 GPU via MPS. Install into an isolated virtual environment so it doesn't
-touch your system Python:
+touch your system Python.
+
+**Requires Python 3.11 or newer.** macOS ships with 3.9, which will not
+work. Install 3.11 first:
+
+```bash
+brew install python@3.11
+```
+
+Then:
 
 ```bash
 git clone https://github.com/ravenprotocol/ravnest-agent.git
 cd ravnest-agent
 
-python3 -m venv .venv
-source .venv/bin/activate         # run this each new shell session
+python3.11 -m venv .venv           # MUST use python3.11, not python3
+source .venv/bin/activate          # run this each new shell session
+pip install --upgrade pip          # old pip can't build modern pyproject.toml
 pip install -e '.[inference]'
 
 ravnest native                     # auto-detects MPS, starts 2 local nodes
