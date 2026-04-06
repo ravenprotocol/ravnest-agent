@@ -64,6 +64,7 @@ def create_app(engine, tokenizer):
     # Mutable container so engine/tokenizer can be swapped during hot-reconfigure
     app.state.engine = engine
     app.state.tokenizer = tokenizer
+    app.state.ready = True  # set to False during model loading/reconfigure
 
     if API_KEY:
         print(f"[api] API key auth enabled (key length: {len(API_KEY)})")
@@ -113,11 +114,18 @@ def create_app(engine, tokenizer):
 
     @app.get("/health")
     def health():
+        if not app.state.ready:
+            return {"status": "loading", "detail": "Model is still loading, try again shortly"}
         return {"status": "ok"}
 
     @app.post("/v1/chat/completions")
     def chat_completions(request: ChatCompletionRequest, raw_request: Request):
         check_auth(raw_request)
+        if not app.state.ready:
+            raise HTTPException(
+                status_code=503,
+                detail="Model is still loading. Check GET /health for status.",
+            )
         prompt, prompt_token_count = validate_request(request)
 
         acquired = lock.acquire(blocking=False)

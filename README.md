@@ -120,10 +120,50 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 Compatible with **Open WebUI**, **LangChain**, **Continue.dev**, and any
 OpenAI client — just point it at `http://localhost:8000`.
 
+#### Streaming
+
+Add `"stream": true` to your request for token-by-token Server-Sent Events:
+
+```bash
+curl -N -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "ravnest",
+    "messages": [{"role": "user", "content": "Tell me a story"}],
+    "max_tokens": 200,
+    "stream": true
+  }'
+```
+
+#### Open WebUI (ChatGPT-like interface)
+
+Point [Open WebUI](https://github.com/open-webui/open-webui) at your
+Ravnest API for a full chat UI:
+
+```bash
+docker run -d -p 3000:8080 \
+  -e OPENAI_API_BASE_URL=http://host.docker.internal:8000/v1 \
+  -e OPENAI_API_KEY=unused \
+  --name open-webui \
+  ghcr.io/open-webui/open-webui:main
+```
+
+Then open http://localhost:3000. On first visit, create a local account
+(stays on your machine). Select "ravnest" as the model and start chatting.
+
+> On Linux, replace `host.docker.internal` with your machine's LAN IP.
+
 #### Benchmarking
 
 ```bash
 ravnest bench --tokens 50 --runs 3
+```
+
+#### Background mode
+
+```bash
+ravnest native --background        # starts cluster, returns to shell
+ravnest native-stop                # stops background cluster
 ```
 
 #### Other CLI commands

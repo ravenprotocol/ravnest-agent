@@ -551,10 +551,30 @@ def cmd_native(args):
             if proportions_str:
                 env["RAVNEST_PROPORTIONS"] = proportions_str
 
-            role_str = "root+API" if is_root else "leaf"
+            # Determine role: rank 0 = root, last rank = leaf, middle = stem
+            if is_root:
+                role_str = "root+API"
+                env["NODE_ROLE"] = "root"
+            elif rank == world_size - 1:
+                role_str = "leaf"
+                env["NODE_ROLE"] = "leaf"
+            else:
+                role_str = "stem"
+                env["NODE_ROLE"] = "stem"
+
             print(f"Starting node-{rank} ({role_str})...")
             p = subprocess.Popen([sys.executable, entrypoint], env=env)
             procs.append(p)
+
+        if args.background:
+            # Write PID file for later shutdown
+            pid_file = os.path.expanduser("~/.cache/ravnest/native.pid")
+            os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+            with open(pid_file, "w") as f:
+                f.write(",".join(str(p.pid) for p in procs))
+            print(f"Cluster running in background (PIDs in {pid_file})")
+            print(f"Stop with: ravnest native-stop")
+            return
 
         # Wait for any process to exit
         while True:
@@ -573,6 +593,25 @@ def cmd_native(args):
                 p.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 p.kill()
+
+
+def cmd_native_stop(args):
+    """Stop a background native cluster."""
+    import signal
+    pid_file = os.path.expanduser("~/.cache/ravnest/native.pid")
+    if not os.path.exists(pid_file):
+        print("No background cluster found.")
+        return
+    with open(pid_file) as f:
+        pids = [int(p) for p in f.read().strip().split(",") if p]
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            print(f"Stopped process {pid}")
+        except ProcessLookupError:
+            print(f"Process {pid} already stopped")
+    os.remove(pid_file)
+    print("Cluster stopped.")
 
 
 def cmd_worker(args):
@@ -901,10 +940,15 @@ def main():
     native_parser.add_argument("--auto-profile", action="store_true", default=False,
                                help="[multi-machine] auto-detect hardware and split layers "
                                     "proportionally (MPS/GPU nodes get more layers)")
+    native_parser.add_argument("--background", "-b", action="store_true", default=False,
+                               help="Run in background (stop with: ravnest native-stop)")
+
+    # ravnest native-stop
+    subparsers.add_parser("native-stop", help="Stop a background native cluster")
 
     # ravnest down / status
-    subparsers.add_parser("down", help="Stop distributed inference")
-    subparsers.add_parser("status", help="Show running containers")
+    subparsers.add_parser("down", help="Stop distributed inference (Docker)")
+    subparsers.add_parser("status", help="Show running containers (Docker)")
 
     args = parser.parse_args()
 
@@ -922,6 +966,8 @@ def main():
         cmd_worker(args)
     elif args.command == "native":
         cmd_native(args)
+    elif args.command == "native-stop":
+        cmd_native_stop(args)
     elif args.command == "models":
         cmd_models(args)
     elif args.command == "pull":

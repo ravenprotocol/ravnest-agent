@@ -130,22 +130,24 @@ def run_root():
     uvicorn.run(app, host="0.0.0.0", port=api_port, log_level="info")
 
 
-def run_leaf():
-    """Node-1: create engine, enter infinite receive loop."""
+def run_non_root():
+    """Non-root node (leaf or stem): create engine, enter infinite receive loop."""
     engine, tokenizer = create_node_and_engine()
+    rank = int(os.environ.get("RANK", "1"))
+    role = os.environ.get("NODE_ROLE", "leaf")
 
-    print("[node-1] Entering receive loop (waiting for root broadcasts)...")
+    print(f"[node-{rank}] Entering receive loop as {role} (waiting for root broadcasts)...")
     while True:
         try:
             engine.generate(prompt_list=None, max_seq_lengths=None)
         except RuntimeError as e:
             import traceback
-            print(f"[node-1] Generation error: {e}")
+            print(f"[node-{rank}] Generation error: {e}")
             traceback.print_exc()
             time.sleep(5)
         except Exception as e:
             import traceback
-            print(f"[node-1] Unexpected error: {e}")
+            print(f"[node-{rank}] Unexpected error: {e}")
             traceback.print_exc()
             time.sleep(5)
 
@@ -155,4 +157,4 @@ if __name__ == "__main__":
     if role == "root":
         run_root()
     else:
-        run_leaf()
+        run_non_root()
