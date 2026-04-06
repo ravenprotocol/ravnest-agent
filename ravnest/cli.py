@@ -390,12 +390,51 @@ def cmd_coordinator(args):
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
 
 
+def _find_free_port(start_port):
+    """Find a free TCP port, starting from start_port."""
+    for port in range(start_port, start_port + 100):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind(("127.0.0.1", port))
+            s.close()
+            return port
+        except OSError:
+            continue
+    return start_port  # fallback, let it fail later with a clear error
+
+
+def _pre_download_model(model, cache_dir):
+    """Download model and tokenizer once before spawning nodes."""
+    print(f"Downloading model: {model}")
+    print(f"  Cache dir: {cache_dir}")
+    print(f"  (subsequent runs will use the cached copy)")
+    print()
+    subprocess.run(
+        [sys.executable, "-c", f"""
+import os
+os.environ['HF_HOME'] = '{cache_dir}'
+os.environ['TRANSFORMERS_CACHE'] = '{cache_dir}'
+from transformers import AutoTokenizer, AutoModelForCausalLM
+print('  Downloading tokenizer...')
+AutoTokenizer.from_pretrained('{model}', cache_dir='{cache_dir}')
+print('  Downloading model weights...')
+AutoModelForCausalLM.from_pretrained('{model}', cache_dir='{cache_dir}')
+print('  Done!')
+"""],
+        check=True,
+    )
+    print()
+
+
 def cmd_native(args):
-    """Launch a 2-node cluster as native processes on this machine (no Docker).
+    """Launch a cluster as native processes (no Docker).
 
     Primarily for platforms where Docker can't access the local GPU
-    (macOS / Apple Silicon MPS).
+    (macOS / Apple Silicon MPS), and for multi-machine runs over
+    Tailscale or LAN.
     """
+    import time as _time
+
     hw = detect_hardware()
     device = args.device or hw["device"]
     model = args.model or "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
@@ -427,6 +466,38 @@ def cmd_native(args):
 
     peers = ",".join(peer_list)
 
+    # Auto-find a free port if the requested one is taken (root only)
+    if 0 in ranks_to_run:
+        actual_port = _find_free_port(port)
+        if actual_port != port:
+            print(f"Port {port} is in use, using {actual_port} instead.")
+        port = actual_port
+
+    # Auto-profile: exchange hardware info and compute proportions
+    proportions_str = ""
+    if args.auto_profile and args.peers:
+        print(f"Auto-profiling hardware...")
+        from ravnest.hardware import get_hardware_info, compute_proportions
+        my_hw = get_hardware_info()
+        print(f"  This node: {my_hw['name']} ({my_hw['type']}, {my_hw['memory_gb']}GB)")
+        # For multi-machine: user must pass same --auto-profile on all nodes.
+        # Each node sends its hw info to root, root computes proportions.
+        # For now, estimate: MPS/CUDA nodes get 4x/10x weight vs CPU.
+        # We compute locally with a placeholder for the remote node.
+        if args.rank == 0:
+            print(f"  Root node will collect hardware from {world_size - 1} peer(s)...")
+            from ravnest.hardware import collect_hardware_as_root
+            hw_list, proportions = collect_hardware_as_root(world_size)
+            proportions_str = ",".join(str(p) for p in proportions)
+            print(f"  Proportions: {proportions}")
+        else:
+            print(f"  Reporting hardware to root...")
+            from ravnest.hardware import report_hardware_to_root
+            _, proportions = report_hardware_to_root(args.rank, peer_list[0])
+            proportions_str = ",".join(str(p) for p in proportions)
+            print(f"  Proportions: {proportions}")
+        print()
+
     print(f"Ravnest Native (no Docker)")
     print(f"  Model:       {model}")
     print(f"  Device:      {device}")
@@ -436,6 +507,19 @@ def cmd_native(args):
     if 0 in ranks_to_run:
         print(f"  API:         http://localhost:{port}")
     print()
+
+    # Pre-download model before spawning nodes (avoids parallel downloads + race)
+    cache_dir = os.environ.get("MODEL_CACHE_DIR",
+                               os.path.expanduser("~/.cache/ravnest/models"))
+    os.makedirs(cache_dir, exist_ok=True)
+    # Check if model is already cached (look for config.json in HF cache structure)
+    model_cached = any(
+        os.path.exists(os.path.join(cache_dir, d, "config.json"))
+        for d in os.listdir(cache_dir)
+        if d.startswith("models--")
+    ) if os.path.isdir(cache_dir) and os.listdir(cache_dir) else False
+    if not model_cached:
+        _pre_download_model(model, cache_dir)
 
     # Spawn the requested rank(s) as subprocess(es)
     procs = []
@@ -455,11 +539,17 @@ def cmd_native(args):
                 "RAVNEST_PEERS": peers,
                 "PYTHONUNBUFFERED": "1",
                 "PYTHONPATH": repo_root + os.pathsep + env.get("PYTHONPATH", ""),
+                "MODEL_CACHE_DIR": cache_dir,
             })
+            # MPS fallback: auto-route unsupported ops to CPU
+            if device == "mps":
+                env["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
             if is_root:
                 env["RAVNEST_API_PORT"] = str(port)
             if args.api_key:
                 env["RAVNEST_API_KEY"] = args.api_key
+            if proportions_str:
+                env["RAVNEST_PROPORTIONS"] = proportions_str
 
             role_str = "root+API" if is_root else "leaf"
             print(f"Starting node-{rank} ({role_str})...")
@@ -472,8 +562,7 @@ def cmd_native(args):
                 if p.poll() is not None:
                     print(f"\nnode exited with code {p.returncode}, shutting down cluster")
                     raise KeyboardInterrupt
-            import time as _t
-            _t.sleep(1)
+            _time.sleep(1)
     except KeyboardInterrupt:
         print("\nStopping nodes...")
         for p in procs:
@@ -809,6 +898,9 @@ def main():
                                     "(0 = root+API, N-1 = leaf)")
     native_parser.add_argument("--world-size", type=int, default=None,
                                help="[multi-machine] total nodes (default: len(peers))")
+    native_parser.add_argument("--auto-profile", action="store_true", default=False,
+                               help="[multi-machine] auto-detect hardware and split layers "
+                                    "proportionally (MPS/GPU nodes get more layers)")
 
     # ravnest down / status
     subparsers.add_parser("down", help="Stop distributed inference")

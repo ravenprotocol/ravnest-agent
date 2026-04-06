@@ -196,6 +196,8 @@ class Communication_Dynamic:
         # Connection protocol: lower rank connects to higher rank
         # Higher rank accepts from lower rank
         threads = []
+        conn_timeout = int(os.environ.get("RAVNEST_CONN_TIMEOUT", "60"))
+        max_attempts = conn_timeout // 2  # retry every 2 seconds
 
         # Accept from lower rank (if not ROOT)
         if self.rank > 0:
@@ -216,17 +218,28 @@ class Communication_Dynamic:
                 next_rank = self.rank + 1
                 target_host = self.peer_ips.get(next_rank, os.environ.get("MASTER_ADDR", "localhost"))
                 target_port = self.listen_port + next_rank
-                for attempt in range(60):
+                for attempt in range(max_attempts):
                     try:
                         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(5)
                         sock.connect((target_host, target_port))
+                        sock.settimeout(None)
                         sock.sendall(struct.pack(">I", self.rank))
                         self.peers[next_rank] = sock
                         print(f"[dynamic-comm] Rank {self.rank} connected to rank {next_rank} ({target_host}:{target_port})")
                         return
-                    except ConnectionRefusedError:
+                    except (ConnectionRefusedError, OSError) as e:
+                        if attempt % 5 == 0 and attempt > 0:
+                            print(f"[dynamic-comm] Rank {self.rank} still waiting for rank {next_rank} at {target_host}:{target_port} ({attempt * 2}s elapsed)...")
                         time.sleep(2)
-                raise RuntimeError(f"Could not connect to rank {next_rank} at {target_host}:{target_port}")
+                raise RuntimeError(
+                    f"Could not connect to rank {next_rank} at {target_host}:{target_port} "
+                    f"after {conn_timeout}s. Check that:\n"
+                    f"  1. The other node is running (ravnest native --rank {next_rank})\n"
+                    f"  2. The IP address {target_host} is reachable (try: ping {target_host})\n"
+                    f"  3. Port {target_port} is not blocked by a firewall\n"
+                    f"  4. Both nodes use the same --peers list"
+                )
             t = threading.Thread(target=connect_next, daemon=True)
             t.start()
             threads.append(t)
@@ -249,24 +262,31 @@ class Communication_Dynamic:
             # Non-root connects to root for metadata
             def connect_metadata():
                 root_addr = self.peer_ips.get(0, os.environ.get("MASTER_ADDR", "localhost"))
-                for attempt in range(60):
+                for attempt in range(max_attempts):
                     try:
                         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(5)
                         sock.connect((root_addr, self.listen_port))
+                        sock.settimeout(None)
                         sock.sendall(struct.pack(">I", self.rank))
                         self.peers["meta_root"] = sock
                         print(f"[dynamic-comm] Rank {self.rank} metadata channel to root ({root_addr})")
                         return
-                    except ConnectionRefusedError:
+                    except (ConnectionRefusedError, OSError) as e:
+                        if attempt % 5 == 0 and attempt > 0:
+                            print(f"[dynamic-comm] Rank {self.rank} still waiting for root at {root_addr}:{self.listen_port} ({attempt * 2}s elapsed)...")
                         time.sleep(2)
-                raise RuntimeError(f"Could not connect metadata channel to root at {root_addr}")
+                raise RuntimeError(
+                    f"Could not connect metadata channel to root at {root_addr}:{self.listen_port} "
+                    f"after {conn_timeout}s. Is the root node running?"
+                )
             t = threading.Thread(target=connect_metadata, daemon=True)
             t.start()
             threads.append(t)
 
         # Wait for all connections
         for t in threads:
-            t.join(timeout=300)
+            t.join(timeout=conn_timeout + 10)
 
         print(f"[dynamic-comm] Rank {self.rank} all connections established ({len(self.peers)} peers)")
 
