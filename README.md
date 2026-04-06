@@ -16,87 +16,97 @@ Ravnest introduces a novel asynchronous parallel training approach that combines
 
 ### Features
 
+- **Distributed LLM Inference** — split one model across multiple machines, each runs a slice
+- **Supported Models**: Llama, Mistral, Phi-3, Qwen-2, TinyLlama
+- **OpenAI-compatible API** — works with Open WebUI, LangChain, Continue.dev, any OpenAI client
+- **Apple Silicon (MPS) support** — native mode uses Mac GPU, no Docker needed
+- **Multi-machine over Tailscale/LAN** — combine GPUs across friends' computers
+- **Auto hardware profiling** — detects GPU/CPU/MPS, splits layers proportionally
+- **Docker Compose** for Linux/NVIDIA setups (CPU and GPU images)
+- **Dynamic TCP backend** — hot-swap nodes without restarting the cluster
+- **KV Cache** with paged attention for memory-efficient generation
 - **Distributed Training** across heterogeneous consumer-grade PCs
-- **Distributed LLM Inference** with paged attention and pipeline parallelism
-- **Supported Models**: Llama, Mistral, Phi-3, Qwen-2
-- **Docker Compose** setup for multi-node inference with OpenAI-compatible API
-- **Dual backends**: gRPC for TCP, torch.distributed (Gloo/NCCL) for GPU clusters
-- **KV Cache** with paged attention for memory-efficient inference
 
 ![-----------------------------------------------------](https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/aqua.png)
 
-### Installation
-```bash
-pip install git+https://github.com/ravenprotocol/ravnest.git
-```
+### Quick Start
 
-![-----------------------------------------------------](https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/aqua.png)
+#### Option 1: macOS / Apple Silicon (native, no Docker)
 
-### Distributed Inference
-
-Run a Llama model split across multiple containers with an OpenAI-compatible API endpoint.
-
-**One command** (auto-detects GPU/CPU):
-```bash
-ravnest up
-```
-
-**With options:**
-```bash
-ravnest up --model meta-llama/Llama-3.1-8B --nodes 3 --port 8000
-ravnest up --device cpu --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
-ravnest status
-ravnest down
-```
-
-**Or use Docker Compose directly:**
-
-```bash
-cd deploy
-docker compose up --build                                    # GPU
-docker compose -f docker-compose.cpu.yml up --build          # CPU
-```
-
-#### macOS / Apple Silicon (native, no Docker)
-
-Docker Desktop on Mac runs a Linux VM that can't access the host GPU,
-so Mac users should run Ravnest **natively** to use the Apple Silicon
-GPU via MPS. Install into an isolated virtual environment so it doesn't
-touch your system Python.
-
-**Requires Python 3.11 or newer.** macOS ships with 3.9, which will not
-work. Install 3.11 first:
-
-```bash
-brew install python@3.11
-```
-
-Then:
+**Requires Python 3.11+.** macOS may ship with 3.9 — install a newer version
+from [python.org](https://www.python.org/downloads/macos/) or `brew install python@3.12`.
 
 ```bash
 git clone https://github.com/ravenprotocol/ravnest-agent.git
-cd ravnest-agent
+cd ravnest-agent && git checkout llm_optim
 
-python3.11 -m venv .venv           # MUST use python3.11, not python3
-source .venv/bin/activate          # run this each new shell session
-pip install --upgrade pip          # old pip can't build modern pyproject.toml
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
 pip install -e '.[inference]'
 
 ravnest native                     # auto-detects MPS, starts 2 local nodes
 ```
 
-Everything — PyTorch, transformers, Ravnest — installs into `.venv/`.
-To uninstall: `deactivate && rm -rf ravnest-agent`. To run again later:
-`cd ravnest-agent && source .venv/bin/activate && ravnest native`.
+Everything installs into `.venv/`. To remove: `rm -rf ravnest-agent`.
 
-> If `pip install` fails with **"externally-managed-environment"**, that's
-> macOS protecting your system Python — the `venv` step above is the
-> fix. Do **not** use `--break-system-packages` or `sudo pip`.
+> If `pip install` fails with **"externally-managed-environment"**, the
+> `venv` step above is the fix. Do **not** use `--break-system-packages`.
 
-Prefer [uv](https://github.com/astral-sh/uv)? Replace the venv lines with
-`uv venv && source .venv/bin/activate && uv pip install -e '.[inference]'`.
+#### Option 2: Linux with Docker (GPU or CPU)
 
-Once running, send requests to the API:
+```bash
+ravnest up                                                    # auto-detect GPU/CPU
+ravnest up --model meta-llama/Llama-3.1-8B --nodes 3         # custom model
+ravnest down                                                  # stop
+```
+
+Or use Docker Compose directly:
+```bash
+cd deploy
+docker compose up --build                                     # GPU (NVIDIA)
+docker compose -f docker-compose.cpu.yml up --build           # CPU
+```
+
+#### Option 3: One-command install (Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ravenprotocol/ravnest-agent/llm_optim/install.sh | bash
+```
+
+Auto-detects GPU/CPU, pulls Docker images, starts a 2-node cluster.
+
+![-----------------------------------------------------](https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/aqua.png)
+
+### Multi-Machine Inference
+
+Split a model across two (or more) computers on the same network or
+connected via [Tailscale](https://tailscale.com/download).
+
+**Machine A** (root — runs the API, gets more layers if it has a GPU):
+```bash
+ravnest native --peers 192.168.1.5,192.168.1.10 --rank 0
+```
+
+**Machine B** (leaf — receives activations, runs its slice):
+```bash
+ravnest native --peers 192.168.1.5,192.168.1.10 --rank 1
+```
+
+Replace IPs with your actual LAN IPs (`ipconfig getifaddr en0` on Mac,
+`hostname -I` on Linux) or Tailscale IPs (`tailscale ip -4`).
+
+Add `--auto-profile` to both commands to automatically give faster nodes
+(GPU/MPS) more layers than CPU nodes.
+
+Start the **leaf first**, then the **root**. The root waits up to 60 seconds
+for the leaf to come online and prints progress while waiting.
+
+![-----------------------------------------------------](https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/aqua.png)
+
+### Using the API
+
+Once running, send requests to the OpenAI-compatible endpoint:
 ```bash
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -107,7 +117,26 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-The API is compatible with Open WebUI, LangChain, Continue.dev, and any tool that speaks the OpenAI protocol. See [deploy/README.md](deploy/README.md) for full details.
+Compatible with **Open WebUI**, **LangChain**, **Continue.dev**, and any
+OpenAI client — just point it at `http://localhost:8000`.
+
+#### Benchmarking
+
+```bash
+ravnest bench --tokens 50 --runs 3
+```
+
+#### Other CLI commands
+
+```bash
+ravnest models                     # list supported models with sizes
+ravnest pull <model-id>            # pre-download a model
+ravnest bench --url http://...     # benchmark tok/s against a running API
+ravnest status                     # show running Docker containers
+ravnest down                       # stop Docker containers
+```
+
+See [deploy/README.md](deploy/README.md) for full Docker details.
 
 ![-----------------------------------------------------](https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/aqua.png)
 
