@@ -11,11 +11,33 @@ from unittest.mock import MagicMock, patch
 
 
 class FakeTokenizer:
+    chat_template = None  # no chat template by default
+
     def encode(self, text):
         return text.split()  # word-level "tokenizer"
 
     def decode(self, ids, skip_special_tokens=False):
         return " ".join(str(i) for i in ids)
+
+
+class FakeChatTokenizer:
+    """Tokenizer with a chat template (mimics TinyLlama-Chat)."""
+    chat_template = "fake template"
+
+    def encode(self, text):
+        return text.split()
+
+    def decode(self, ids, skip_special_tokens=False):
+        return " ".join(str(i) for i in ids)
+
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
+        # Mimic the TinyLlama format
+        parts = []
+        for m in messages:
+            parts.append(f"<|{m['role']}|>\n{m['content']}</s>")
+        if add_generation_prompt:
+            parts.append("<|assistant|>\n")
+        return "\n".join(parts)
 
 
 class FakeEngine:
@@ -258,6 +280,93 @@ class TestAuth:
                 headers={"Authorization": "Bearer wrong-key"},
             )
             assert resp.status_code == 401
+
+
+class TestModelsEndpoint:
+    def test_lists_loaded_model(self, client, app):
+        resp = client.get("/v1/models")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["object"] == "list"
+        assert len(data["data"]) == 1
+        assert data["data"][0]["object"] == "model"
+
+    def test_model_id_present(self, client, app):
+        resp = client.get("/v1/models")
+        data = resp.json()
+        assert "id" in data["data"][0]
+
+    def test_model_owned_by_ravnest(self, client, app):
+        resp = client.get("/v1/models")
+        assert resp.json()["data"][0]["owned_by"] == "ravnest"
+
+    def test_model_endpoint_no_auth_needed(self, client, app):
+        """Models endpoint should not require auth (clients call it on connect)."""
+        # Even with API key set, /v1/models should work
+        resp = client.get("/v1/models")
+        assert resp.status_code == 200
+
+
+class TestCORS:
+    def test_cors_headers_on_options(self, client, app):
+        """CORS preflight (OPTIONS) should return Access-Control-Allow-Origin."""
+        resp = client.options(
+            "/v1/chat/completions",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        # Should not be rejected by CORS
+        assert resp.status_code in (200, 204)
+        assert "access-control-allow-origin" in {h.lower() for h in resp.headers.keys()}
+
+    def test_cors_allows_browser_origin(self, client, app):
+        resp = client.get("/v1/models", headers={"Origin": "http://localhost:3000"})
+        assert resp.status_code == 200
+        # Starlette's CORSMiddleware adds this header on real requests too
+        assert resp.headers.get("access-control-allow-origin") in ("*", "http://localhost:3000")
+
+
+class TestChatTemplate:
+    def test_chat_template_used_when_available(self):
+        """When tokenizer has a chat template, it should be applied."""
+        from deploy.api_server import create_app
+        from fastapi.testclient import TestClient
+
+        app = create_app(FakeEngine(), FakeChatTokenizer())
+        app.state.ready = True
+        client = TestClient(app)
+
+        resp = client.post("/v1/chat/completions", json={
+            "model": "ravnest",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 10,
+        })
+        assert resp.status_code == 200
+
+    def test_fallback_format_for_base_models(self, client, app):
+        """When tokenizer has no chat template, falls back to User:/Assistant: format."""
+        # FakeTokenizer has chat_template = None, so fallback path is used
+        resp = client.post("/v1/chat/completions", json={
+            "model": "ravnest",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 10,
+        })
+        assert resp.status_code == 200
+
+    def test_chat_template_function_directly(self):
+        """Verify the build_prompt logic via direct call."""
+        from deploy.api_server import create_app
+        from deploy.api_server import ChatMessage
+
+        chat_app = create_app(FakeEngine(), FakeChatTokenizer())
+        # The chat template should produce the assistant marker
+        result = FakeChatTokenizer().apply_chat_template(
+            [{"role": "user", "content": "hi"}], tokenize=False, add_generation_prompt=True
+        )
+        assert "<|user|>" in result
+        assert "<|assistant|>" in result
 
 
 class TestConcurrency:

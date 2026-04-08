@@ -17,6 +17,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 
@@ -61,10 +62,20 @@ def create_app(engine, tokenizer):
     MAX_SEQ_LENGTH = 3000
     API_KEY = os.environ.get("RAVNEST_API_KEY", "")
 
+    # CORS — allow browser-based clients (Open WebUI in browser, custom UIs, etc.)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     # Mutable container so engine/tokenizer can be swapped during hot-reconfigure
     app.state.engine = engine
     app.state.tokenizer = tokenizer
     app.state.ready = True  # set to False during model loading/reconfigure
+    app.state.model_id = os.environ.get("MODEL_NAME", "ravnest")
 
     if API_KEY:
         print(f"[api] API key auth enabled (key length: {len(API_KEY)})")
@@ -85,6 +96,23 @@ def create_app(engine, tokenizer):
             raise HTTPException(status_code=401, detail="Invalid API key")
 
     def build_prompt(messages):
+        """Build a prompt using the model's chat template if available.
+
+        Falls back to a generic User:/Assistant: format for non-chat models.
+        """
+        tokenizer = app.state.tokenizer
+        msgs = [{"role": m.role, "content": m.content} for m in messages]
+
+        # Try the tokenizer's chat template first (correct for chat models)
+        if hasattr(tokenizer, "apply_chat_template") and getattr(tokenizer, "chat_template", None):
+            try:
+                return tokenizer.apply_chat_template(
+                    msgs, tokenize=False, add_generation_prompt=True
+                )
+            except Exception:
+                pass  # fall through to generic format
+
+        # Fallback for base models without a chat template
         prompt_parts = []
         for msg in messages:
             if msg.role == "system":
@@ -117,6 +145,26 @@ def create_app(engine, tokenizer):
         if not app.state.ready:
             return {"status": "loading", "detail": "Model is still loading, try again shortly"}
         return {"status": "ok"}
+
+    @app.get("/v1/models")
+    def list_models():
+        """OpenAI-compatible models endpoint. Returns the loaded model.
+
+        OpenAI clients (Open WebUI, LangChain, etc.) call this on connect
+        to discover available models. Returning a single entry — the model
+        currently loaded in the cluster.
+        """
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": app.state.model_id,
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "ravnest",
+                }
+            ],
+        }
 
     @app.post("/v1/chat/completions")
     def chat_completions(request: ChatCompletionRequest, raw_request: Request):
