@@ -159,6 +159,17 @@ Then open http://localhost:3000. On first visit, create a local account
 ravnest bench --tokens 50 --runs 3
 ```
 
+#### Single-node mode
+
+Run the full model on one machine without splitting — useful as a baseline
+or when you just want a local OpenAI-compatible API:
+
+```bash
+ravnest native --nodes 1
+```
+
+No distributed infrastructure, no pipeline, just one model serving an API.
+
 #### Background mode
 
 ```bash

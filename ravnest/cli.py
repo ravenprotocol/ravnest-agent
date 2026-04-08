@@ -426,6 +426,74 @@ print('  Done!')
     print()
 
 
+def _run_single_node(args, repo_root, entrypoint_single, device, model, port):
+    """Run full model on one machine, no splitting, no communication layer."""
+    import time as _time
+
+    if not os.path.exists(entrypoint_single):
+        print("Error: cannot find deploy/entrypoint_single.py.")
+        sys.exit(1)
+
+    actual_port = _find_free_port(port)
+    if actual_port != port:
+        print(f"Port {port} is in use, using {actual_port} instead.")
+        port = actual_port
+
+    cache_dir = os.environ.get("MODEL_CACHE_DIR",
+                               os.path.expanduser("~/.cache/ravnest/models"))
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Pre-download
+    model_cached = any(
+        os.path.exists(os.path.join(cache_dir, d, "config.json"))
+        for d in os.listdir(cache_dir)
+        if d.startswith("models--")
+    ) if os.path.isdir(cache_dir) and os.listdir(cache_dir) else False
+    if not model_cached:
+        _pre_download_model(model, cache_dir)
+
+    print(f"Ravnest Native — Single Node (no splitting)")
+    print(f"  Model:   {model}")
+    print(f"  Device:  {device}")
+    print(f"  API:     http://localhost:{port}")
+    print()
+
+    env = os.environ.copy()
+    env.update({
+        "MODEL_NAME": model,
+        "RAVNEST_DEVICE": device,
+        "RAVNEST_API_PORT": str(port),
+        "MODEL_CACHE_DIR": cache_dir,
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONPATH": repo_root + os.pathsep + env.get("PYTHONPATH", ""),
+    })
+    if device == "mps":
+        env["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+    if args.api_key:
+        env["RAVNEST_API_KEY"] = args.api_key
+
+    p = subprocess.Popen([sys.executable, entrypoint_single], env=env)
+
+    if hasattr(args, 'background') and args.background:
+        pid_file = os.path.expanduser("~/.cache/ravnest/native.pid")
+        os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+        with open(pid_file, "w") as f:
+            f.write(str(p.pid))
+        print(f"Running in background (PID {p.pid})")
+        print(f"Stop with: ravnest native-stop")
+        return
+
+    try:
+        p.wait()
+    except KeyboardInterrupt:
+        print("\nStopping...")
+        p.terminate()
+        try:
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            p.kill()
+
+
 def cmd_native(args):
     """Launch a cluster as native processes (no Docker).
 
@@ -440,12 +508,17 @@ def cmd_native(args):
     model = args.model or "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     port = args.port
 
-    # Find entrypoint.py: either in-repo (deploy/entrypoint.py) or shipped with package
+    # Find entrypoints
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     entrypoint = os.path.join(repo_root, "deploy", "entrypoint.py")
+    entrypoint_single = os.path.join(repo_root, "deploy", "entrypoint_single.py")
     if not os.path.exists(entrypoint):
         print(f"Error: cannot find deploy/entrypoint.py. Run from a ravnest checkout.")
         sys.exit(1)
+
+    # Single-node mode: --nodes 1 with no --peers runs full model, no splitting
+    if not args.peers and (args.nodes == 1 or (hasattr(args, 'single') and args.single)):
+        return _run_single_node(args, repo_root, entrypoint_single, device, model, port)
 
     # Multi-machine mode: user passes --peers host1,host2,... and --rank R
     # Single-machine mode: default, runs all ranks on 127.0.0.1
