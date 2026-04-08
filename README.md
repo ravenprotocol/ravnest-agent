@@ -159,6 +159,17 @@ Then open http://localhost:3000. On first visit, create a local account
 ravnest bench --tokens 50 --runs 3
 ```
 
+#### Diagnostics
+
+Before running a multi-machine cluster, run `doctor` to check Python
+version, dependencies, hardware, ports, disk space, and (if `--peers`
+is given) reachability of each peer:
+
+```bash
+ravnest doctor                                    # local checks
+ravnest doctor --peers 100.64.1.5,100.64.1.10    # also pings peers
+```
+
 #### Single-node mode
 
 Run the full model on one machine without splitting — useful as a baseline

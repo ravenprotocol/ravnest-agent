@@ -687,6 +687,209 @@ def cmd_native_stop(args):
     print("Cluster stopped.")
 
 
+def _check_module(name):
+    """Try to import a module, return (ok, version_or_error)."""
+    try:
+        mod = __import__(name)
+        version = getattr(mod, "__version__", "unknown")
+        return True, version
+    except ImportError as e:
+        return False, str(e)
+
+
+def _check_port_free(port):
+    """Check if a TCP port is free on localhost."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", port))
+        s.close()
+        return True
+    except OSError:
+        return False
+
+
+def _check_peer_reachable(host, port=None, timeout=3):
+    """Try to reach a host (TCP if port given, else just resolve DNS)."""
+    try:
+        if port:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect((host, port))
+            s.close()
+            return True, "reachable"
+        else:
+            socket.gethostbyname(host)
+            return True, "DNS resolves"
+    except socket.gaierror:
+        return False, "DNS resolution failed"
+    except (ConnectionRefusedError, socket.timeout):
+        return False, f"unreachable on port {port}"
+    except OSError as e:
+        return False, str(e)
+
+
+def cmd_doctor(args):
+    """Run preflight diagnostics for ravnest setup."""
+    GREEN = "\033[0;32m"
+    RED = "\033[0;31m"
+    YELLOW = "\033[1;33m"
+    NC = "\033[0m"
+
+    def ok(msg):
+        print(f"  {GREEN}✓{NC} {msg}")
+
+    def fail(msg):
+        print(f"  {RED}✗{NC} {msg}")
+
+    def warn(msg):
+        print(f"  {YELLOW}!{NC} {msg}")
+
+    issues = []
+
+    print(f"\n{GREEN}Ravnest Doctor — system check{NC}\n")
+
+    # --- Python version ---
+    print("Python:")
+    py_version = sys.version.split()[0]
+    if sys.version_info >= (3, 11):
+        ok(f"Python {py_version}")
+    else:
+        fail(f"Python {py_version} — needs 3.11+")
+        issues.append("Upgrade Python to 3.11 or newer")
+
+    # --- Required packages ---
+    print("\nDependencies:")
+    required = ["torch", "transformers", "fastapi", "uvicorn", "psutil"]
+    for pkg in required:
+        installed, info = _check_module(pkg)
+        if installed:
+            ok(f"{pkg} {info}")
+        else:
+            fail(f"{pkg} — not installed")
+            issues.append(f"pip install {pkg}")
+
+    # --- Hardware ---
+    print("\nHardware:")
+    try:
+        import torch
+        if torch.cuda.is_available():
+            n = torch.cuda.device_count()
+            for i in range(n):
+                p = torch.cuda.get_device_properties(i)
+                ok(f"CUDA GPU {i}: {p.name} ({p.total_mem / 1e9:.1f} GB)")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            ok("Apple Silicon GPU (MPS) available")
+        else:
+            warn("No GPU detected — will run on CPU (slower)")
+    except ImportError:
+        fail("torch not installed — cannot check hardware")
+
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        ok(f"RAM: {mem.total / 1e9:.1f} GB total, {mem.available / 1e9:.1f} GB available")
+        cpu_count = psutil.cpu_count()
+        ok(f"CPU cores: {cpu_count}")
+    except ImportError:
+        pass
+
+    # --- Disk space for model cache ---
+    print("\nModel cache:")
+    cache_dir = os.path.expanduser("~/.cache/ravnest/models")
+    if os.path.isdir(cache_dir):
+        try:
+            import shutil
+            stat = shutil.disk_usage(cache_dir)
+            free_gb = stat.free / 1e9
+            if free_gb >= 10:
+                ok(f"{cache_dir} ({free_gb:.1f} GB free)")
+            elif free_gb >= 2:
+                warn(f"{cache_dir} ({free_gb:.1f} GB free — only enough for small models)")
+            else:
+                fail(f"{cache_dir} ({free_gb:.1f} GB free — too little)")
+                issues.append(f"Free up disk space at {cache_dir}")
+        except OSError:
+            warn(f"{cache_dir} exists but disk usage check failed")
+        # List cached models
+        try:
+            cached = [d.replace("models--", "").replace("--", "/")
+                      for d in os.listdir(cache_dir)
+                      if d.startswith("models--")]
+            if cached:
+                ok(f"Cached models: {', '.join(cached)}")
+            else:
+                warn("No models cached yet (use: ravnest pull <model-id>)")
+        except OSError:
+            pass
+    else:
+        warn(f"{cache_dir} does not exist (will be created on first use)")
+
+    # --- Network ports ---
+    print("\nPorts:")
+    port = args.port if args.port else 8000
+    if _check_port_free(port):
+        ok(f"API port {port} is free")
+    else:
+        fail(f"API port {port} is in use")
+        issues.append(f"Stop whatever is using port {port}, or use --port")
+
+    for p in (29500, 29501):
+        if _check_port_free(p):
+            ok(f"Cluster port {p} is free")
+        else:
+            warn(f"Cluster port {p} is in use (will pick another)")
+
+    # --- Peer reachability (if --peers given) ---
+    if args.peers:
+        print("\nPeers:")
+        peer_list = [h.strip() for h in args.peers.split(",")]
+        for i, host in enumerate(peer_list):
+            target_port = 29500 + i
+            reachable, msg = _check_peer_reachable(host, target_port)
+            if reachable:
+                ok(f"{host}:{target_port} — {msg}")
+            else:
+                # DNS-only check as fallback
+                dns_ok, dns_msg = _check_peer_reachable(host, None)
+                if dns_ok:
+                    warn(f"{host}:{target_port} — {dns_msg} but {msg}")
+                    warn(f"  (this is expected if the peer isn't running yet)")
+                else:
+                    fail(f"{host} — {dns_msg}")
+                    issues.append(f"Cannot reach {host}: check IP and network connectivity")
+
+    # --- Tailscale check (if installed) ---
+    print("\nTailscale (optional):")
+    try:
+        result = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode == 0:
+            ok("Tailscale running")
+            ip_result = subprocess.run(
+                ["tailscale", "ip", "-4"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if ip_result.returncode == 0:
+                ip = ip_result.stdout.strip().split("\n")[0]
+                ok(f"This machine's Tailscale IP: {ip}")
+        else:
+            warn("Tailscale installed but not running")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        warn("Tailscale not installed (optional, useful for multi-machine)")
+
+    # --- Summary ---
+    print()
+    if not issues:
+        print(f"{GREEN}All checks passed.{NC} You're ready to run: ravnest native")
+    else:
+        print(f"{RED}{len(issues)} issue(s) found:{NC}")
+        for i, issue in enumerate(issues, 1):
+            print(f"  {i}. {issue}")
+        sys.exit(1)
+
+
 def cmd_worker(args):
     """Run as a worker managed by a coordinator."""
     try:
@@ -1019,6 +1222,16 @@ def main():
     # ravnest native-stop
     subparsers.add_parser("native-stop", help="Stop a background native cluster")
 
+    # ravnest doctor
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="Run preflight diagnostics (Python, deps, hardware, ports, peers)",
+    )
+    doctor_parser.add_argument("--port", "-p", type=int, default=8000,
+                               help="API port to check (default: 8000)")
+    doctor_parser.add_argument("--peers", type=str, default=None,
+                               help="Comma-separated peer IPs to check reachability")
+
     # ravnest down / status
     subparsers.add_parser("down", help="Stop distributed inference (Docker)")
     subparsers.add_parser("status", help="Show running containers (Docker)")
@@ -1041,6 +1254,8 @@ def main():
         cmd_native(args)
     elif args.command == "native-stop":
         cmd_native_stop(args)
+    elif args.command == "doctor":
+        cmd_doctor(args)
     elif args.command == "models":
         cmd_models(args)
     elif args.command == "pull":
