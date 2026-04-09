@@ -369,6 +369,96 @@ class TestChatTemplate:
         assert "<|assistant|>" in result
 
 
+class TestQueueing:
+    def test_queue_endpoint(self, client, app):
+        resp = client.get("/v1/queue")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["queued"] == 0
+        assert "max" in data
+        assert data["ready"] is True
+
+    def test_queue_full_returns_503(self, client, app):
+        """Pre-fill the queue counter and verify next request gets 503."""
+        # Reach into app and bump queue_size manually to simulate full
+        # We can't easily do this from outside; instead test via env var
+        # by creating a fresh app with max=0
+        from deploy.api_server import create_app
+        with patch.dict(os.environ, {"RAVNEST_MAX_QUEUE": "0"}):
+            mini_app = create_app(FakeEngine(), FakeTokenizer())
+            mini_app.state.ready = True
+            from fastapi.testclient import TestClient
+            mini_client = TestClient(mini_app)
+            resp = mini_client.post("/v1/chat/completions", json={
+                "model": "ravnest",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 5,
+            })
+            assert resp.status_code == 503
+            assert "queue" in resp.json()["detail"].lower() or "busy" in resp.json()["detail"].lower()
+
+    def test_queue_decrements_after_request(self, client, app):
+        # Run a successful request, queue should still be 0
+        client.post("/v1/chat/completions", json={
+            "model": "ravnest",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 5,
+        })
+        resp = client.get("/v1/queue")
+        assert resp.json()["queued"] == 0
+
+
+class TestLegacyCompletions:
+    def test_completions_endpoint_works(self, client, app):
+        resp = client.post("/v1/completions", json={
+            "model": "ravnest",
+            "prompt": "Once upon a time",
+            "max_tokens": 10,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["object"] == "text_completion"
+        assert len(data["choices"]) == 1
+        assert "text" in data["choices"][0]
+
+    def test_completions_response_format(self, client, app):
+        resp = client.post("/v1/completions", json={
+            "model": "ravnest",
+            "prompt": "Hello",
+            "max_tokens": 5,
+        })
+        data = resp.json()
+        assert data["id"].startswith("cmpl-")
+        assert "usage" in data
+        assert "prompt_tokens" in data["usage"]
+
+    def test_completions_empty_prompt_rejected(self, client, app):
+        resp = client.post("/v1/completions", json={
+            "model": "ravnest",
+            "prompt": "",
+            "max_tokens": 5,
+        })
+        assert resp.status_code == 400
+
+    def test_completions_loading_guard(self, client, app):
+        app.state.ready = False
+        resp = client.post("/v1/completions", json={
+            "model": "ravnest",
+            "prompt": "test",
+            "max_tokens": 5,
+        })
+        assert resp.status_code == 503
+        app.state.ready = True
+
+    def test_completions_finish_reason_stop(self, client, app):
+        resp = client.post("/v1/completions", json={
+            "model": "ravnest",
+            "prompt": "test",
+            "max_tokens": 5,
+        })
+        assert resp.json()["choices"][0]["finish_reason"] == "stop"
+
+
 class TestConcurrency:
     def test_503_when_busy(self, client, app):
         """Acquiring the lock before a request should return 503."""

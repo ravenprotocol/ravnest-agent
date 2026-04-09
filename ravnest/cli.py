@@ -728,6 +728,40 @@ def _check_peer_reachable(host, port=None, timeout=3):
         return False, str(e)
 
 
+def cmd_version(args):
+    """Print ravnest version, git commit, Python, torch, transformers."""
+    try:
+        from importlib.metadata import version as pkg_version
+        ravnest_version = pkg_version("ravnest")
+    except Exception:
+        ravnest_version = "unknown"
+
+    # Git commit if running from a checkout
+    git_commit = "unknown"
+    try:
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo_root,
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode == 0:
+            git_commit = result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    print(f"ravnest      {ravnest_version}")
+    print(f"commit       {git_commit}")
+    print(f"python       {sys.version.split()[0]}")
+
+    for pkg in ("torch", "transformers", "fastapi", "uvicorn"):
+        try:
+            from importlib.metadata import version as pkg_version
+            print(f"{pkg:<12} {pkg_version(pkg)}")
+        except Exception:
+            print(f"{pkg:<12} not installed")
+
+
 def cmd_doctor(args):
     """Run preflight diagnostics for ravnest setup."""
     GREEN = "\033[0;32m"
@@ -1222,6 +1256,9 @@ def main():
     # ravnest native-stop
     subparsers.add_parser("native-stop", help="Stop a background native cluster")
 
+    # ravnest version
+    subparsers.add_parser("version", help="Print version + git commit + key dependency versions")
+
     # ravnest doctor
     doctor_parser = subparsers.add_parser(
         "doctor",
@@ -1256,6 +1293,8 @@ def main():
         cmd_native_stop(args)
     elif args.command == "doctor":
         cmd_doctor(args)
+    elif args.command == "version":
+        cmd_version(args)
     elif args.command == "models":
         cmd_models(args)
     elif args.command == "pull":

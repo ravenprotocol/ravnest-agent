@@ -1,4 +1,4 @@
-"""Tests for the ravnest doctor diagnostic command."""
+"""Tests for the ravnest doctor and version commands."""
 import os
 import socket
 import sys
@@ -147,3 +147,36 @@ class TestDoctorIntegration:
             pass
         captured = capsys.readouterr()
         assert "Ports" in captured.out or "port" in captured.out.lower()
+
+
+class TestVersion:
+    def test_version_runs_without_error(self, capsys):
+        from ravnest.cli import cmd_version
+        from argparse import Namespace
+        cmd_version(Namespace())
+        captured = capsys.readouterr()
+        assert "ravnest" in captured.out
+        assert "python" in captured.out
+
+    def test_version_includes_torch(self, capsys):
+        from ravnest.cli import cmd_version
+        from argparse import Namespace
+        cmd_version(Namespace())
+        captured = capsys.readouterr()
+        assert "torch" in captured.out
+
+    def test_version_includes_commit(self, capsys):
+        from ravnest.cli import cmd_version
+        from argparse import Namespace
+        cmd_version(Namespace())
+        captured = capsys.readouterr()
+        assert "commit" in captured.out
+
+    def test_version_includes_python(self, capsys):
+        from ravnest.cli import cmd_version
+        from argparse import Namespace
+        cmd_version(Namespace())
+        captured = capsys.readouterr()
+        # Python version like 3.12.x should appear
+        import sys as _sys
+        assert _sys.version.split()[0] in captured.out

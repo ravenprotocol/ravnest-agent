@@ -56,9 +56,40 @@ class ChatCompletionResponse(BaseModel):
     usage: Usage
 
 
+class CompletionRequest(BaseModel):
+    """Legacy /v1/completions request — single prompt, not chat messages."""
+    model: str = "ravnest"
+    prompt: str
+    max_tokens: int = 128
+    temperature: float = 1.0
+    top_k: int = 1
+    stream: bool = False
+
+
+class CompletionChoice(BaseModel):
+    text: str
+    index: int
+    finish_reason: str
+
+
+class CompletionResponse(BaseModel):
+    id: str
+    object: str = "text_completion"
+    created: int
+    model: str
+    choices: List[CompletionChoice]
+    usage: Usage
+
+
 def create_app(engine, tokenizer):
     app = FastAPI(title="Ravnest Inference API")
+    # Inference lock + FIFO queue: requests wait their turn instead of getting 503
     lock = threading.Lock()
+    queue_depth = threading.Semaphore(0)  # not used for blocking; lock handles serialization
+    queue_size = [0]  # mutable counter; protected by queue_lock
+    queue_lock = threading.Lock()
+    MAX_QUEUE = int(os.environ.get("RAVNEST_MAX_QUEUE", "16"))
+    QUEUE_TIMEOUT = float(os.environ.get("RAVNEST_QUEUE_TIMEOUT", "300"))  # seconds
     MAX_SEQ_LENGTH = 3000
     API_KEY = os.environ.get("RAVNEST_API_KEY", "")
 
@@ -166,6 +197,42 @@ def create_app(engine, tokenizer):
             ],
         }
 
+    def _enqueue_and_acquire():
+        """Reserve a queue slot, then block until the lock is acquired.
+
+        Returns nothing on success; raises HTTPException on overflow or timeout.
+        """
+        with queue_lock:
+            if queue_size[0] >= MAX_QUEUE:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Queue full ({MAX_QUEUE} requests waiting). Try again later.",
+                )
+            queue_size[0] += 1
+
+        try:
+            acquired = lock.acquire(timeout=QUEUE_TIMEOUT)
+            if not acquired:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"Request timed out after {QUEUE_TIMEOUT}s waiting in queue.",
+                )
+        except BaseException:
+            with queue_lock:
+                queue_size[0] -= 1
+            raise
+
+    def _release_queue_slot():
+        with queue_lock:
+            queue_size[0] = max(0, queue_size[0] - 1)
+
+    @app.get("/v1/queue")
+    def queue_status():
+        """Show the current request queue depth — useful for monitoring."""
+        with queue_lock:
+            depth = queue_size[0]
+        return {"queued": depth, "max": MAX_QUEUE, "ready": app.state.ready}
+
     @app.post("/v1/chat/completions")
     def chat_completions(request: ChatCompletionRequest, raw_request: Request):
         check_auth(raw_request)
@@ -176,9 +243,7 @@ def create_app(engine, tokenizer):
             )
         prompt, prompt_token_count = validate_request(request)
 
-        acquired = lock.acquire(blocking=False)
-        if not acquired:
-            raise HTTPException(status_code=503, detail="Server busy, try again later")
+        _enqueue_and_acquire()
 
         try:
             if request.stream:
@@ -189,11 +254,12 @@ def create_app(engine, tokenizer):
             # Lock already released by _non_stream_response or _stream_response
             raise
         except Exception:
-            # Safety net: release lock if somehow not released
+            # Safety net: release lock and queue slot if somehow not released
             try:
                 lock.release()
             except RuntimeError:
                 pass
+            _release_queue_slot()
             raise
 
     def _non_stream_response(request, prompt, prompt_token_count):
@@ -253,6 +319,66 @@ def create_app(engine, tokenizer):
             raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
         finally:
             lock.release()
+            _release_queue_slot()
+
+    @app.post("/v1/completions")
+    def completions(request: CompletionRequest, raw_request: Request):
+        """Legacy OpenAI completions endpoint — single prompt, no chat messages.
+
+        Some older clients (text-completion-only tools) use this instead of
+        /v1/chat/completions. We treat the prompt as a literal string, no
+        chat templating.
+        """
+        check_auth(raw_request)
+        if not app.state.ready:
+            raise HTTPException(
+                status_code=503,
+                detail="Model is still loading. Check GET /health for status.",
+            )
+        if not request.prompt:
+            raise HTTPException(status_code=400, detail="prompt must not be empty")
+
+        prompt = request.prompt
+        prompt_token_count = len(app.state.tokenizer.encode(prompt))
+        if prompt_token_count + request.max_tokens > MAX_SEQ_LENGTH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"prompt + max_tokens exceeds {MAX_SEQ_LENGTH}",
+            )
+
+        _enqueue_and_acquire()
+
+        try:
+            outputs = app.state.engine.generate(
+                prompt_list=[prompt],
+                max_seq_lengths=[request.max_tokens],
+                top_k=request.top_k,
+                temperature=request.temperature,
+            )
+            generated_text = outputs[0] if outputs else ""
+            if generated_text.startswith(prompt):
+                generated_text = generated_text[len(prompt):]
+
+            completion_tokens = len(app.state.tokenizer.encode(generated_text))
+
+            return CompletionResponse(
+                id=f"cmpl-{uuid.uuid4().hex[:12]}",
+                created=int(time.time()),
+                model=request.model,
+                choices=[CompletionChoice(text=generated_text, index=0, finish_reason="stop")],
+                usage=Usage(
+                    prompt_tokens=prompt_token_count,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_token_count + completion_tokens,
+                ),
+            )
+        except (ConnectionError, BrokenPipeError, OSError) as e:
+            raise HTTPException(status_code=503, detail=f"A node disconnected. ({e})")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Generation failed: {e}")
+        finally:
+            lock.release()
+            _release_queue_slot()
 
     def _stream_response(request, prompt, prompt_token_count):
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
@@ -315,6 +441,7 @@ def create_app(engine, tokenizer):
                 yield "data: [DONE]\n\n"
             finally:
                 lock.release()
+                _release_queue_slot()
 
         return StreamingResponse(
             event_stream(),
