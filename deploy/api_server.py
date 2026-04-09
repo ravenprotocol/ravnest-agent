@@ -15,8 +15,10 @@ import threading
 import uuid
 from typing import List, Optional
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -170,6 +172,20 @@ def create_app(engine, tokenizer):
                        f"exceeds max sequence length ({MAX_SEQ_LENGTH})"
             )
         return prompt, prompt_token_count
+
+    # Load the chat UI HTML once at startup
+    chat_ui_path = Path(__file__).parent / "chat_ui.html"
+    chat_ui_html = chat_ui_path.read_text() if chat_ui_path.exists() else None
+
+    @app.get("/", response_class=HTMLResponse)
+    def chat_ui():
+        """Built-in web chat UI — open in a browser to chat with the model."""
+        if chat_ui_html is None:
+            return HTMLResponse(
+                "<h1>Ravnest API</h1><p>Chat UI not bundled. POST to /v1/chat/completions.</p>",
+                status_code=200,
+            )
+        return HTMLResponse(chat_ui_html)
 
     @app.get("/health")
     def health():

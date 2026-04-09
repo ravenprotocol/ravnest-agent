@@ -106,7 +106,12 @@ for the leaf to come online and prints progress while waiting.
 
 ### Using the API
 
-Once running, send requests to the OpenAI-compatible endpoint:
+**Easiest:** open `http://localhost:8000` in your browser. Ravnest ships
+with a built-in chat UI — no setup, no Docker, no Open WebUI required.
+Streaming, dark mode, conversation history. Works on the same port as
+the API.
+
+**Programmatic:** send requests to the OpenAI-compatible endpoint:
 ```bash
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \

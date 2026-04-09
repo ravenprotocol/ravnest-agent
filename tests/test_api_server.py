@@ -369,6 +369,28 @@ class TestChatTemplate:
         assert "<|assistant|>" in result
 
 
+class TestChatUI:
+    def test_root_returns_html(self, client, app):
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+
+    def test_root_has_chat_elements(self, client, app):
+        resp = client.get("/")
+        text = resp.text
+        assert "Ravnest" in text
+        assert "messages" in text
+        assert "/v1/chat/completions" in text
+
+    def test_root_uses_streaming(self, client, app):
+        resp = client.get("/")
+        assert "stream" in resp.text
+
+    def test_root_handles_loading_state(self, client, app):
+        resp = client.get("/")
+        assert "/health" in resp.text
+
+
 class TestQueueing:
     def test_queue_endpoint(self, client, app):
         resp = client.get("/v1/queue")

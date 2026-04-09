@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ravnest Chat</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0f1419;
+    color: #e6e6e6;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: #1a1f2e;
+    padding: 12px 20px;
+    border-bottom: 1px solid #2a3142;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4ade80;
+  }
+  .dot.loading { background: #fbbf24; }
+  .dot.error { background: #ef4444; }
+  .meta {
+    font-size: 12px;
+    color: #888;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    max-width: 800px;
+    margin: 0 auto;
+    width: 100%;
+  }
+  .msg {
+    margin: 16px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .msg .role {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+  }
+  .msg .content {
+    background: #1a1f2e;
+    padding: 12px 16px;
+    border-radius: 8px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .msg.user .content { background: #2a3142; }
+  .msg.assistant .content { background: #1a1f2e; }
+  .empty {
+    text-align: center;
+    color: #666;
+    margin-top: 80px;
+    font-size: 14px;
+  }
+  .empty h2 { font-size: 18px; color: #888; margin-bottom: 8px; }
+  .cursor::after {
+    content: "▊";
+    color: #4ade80;
+    animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  form {
+    background: #1a1f2e;
+    border-top: 1px solid #2a3142;
+    padding: 16px 20px;
+    display: flex;
+    gap: 12px;
+    max-width: 800px;
+    margin: 0 auto;
+    width: 100%;
+  }
+  textarea {
+    flex: 1;
+    background: #0f1419;
+    border: 1px solid #2a3142;
+    border-radius: 6px;
+    color: #e6e6e6;
+    padding: 10px 14px;
+    font-family: inherit;
+    font-size: 14px;
+    resize: none;
+    min-height: 44px;
+    max-height: 200px;
+  }
+  textarea:focus { outline: none; border-color: #4ade80; }
+  button {
+    background: #4ade80;
+    color: #0f1419;
+    border: none;
+    border-radius: 6px;
+    padding: 0 20px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  button:disabled { background: #444; color: #888; cursor: not-allowed; }
+  button:hover:not(:disabled) { background: #22c55e; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="dot" id="status-dot"></span> Ravnest Chat</h1>
+  <span class="meta" id="meta">connecting...</span>
+</header>
+
+<div id="messages">
+  <div class="empty" id="empty">
+    <h2>Distributed inference, in your browser</h2>
+    <p>Type a message below to chat with the model running on your cluster.</p>
+  </div>
+</div>
+
+<form id="form">
+  <textarea id="input" placeholder="Type a message... (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
+  <button type="submit" id="send">Send</button>
+</form>
+
+<script>
+const messagesEl = document.getElementById("messages");
+const emptyEl = document.getElementById("empty");
+const formEl = document.getElementById("form");
+const inputEl = document.getElementById("input");
+const sendBtn = document.getElementById("send");
+const statusDot = document.getElementById("status-dot");
+const metaEl = document.getElementById("meta");
+
+const conversation = [];
+
+// Auto-resize textarea
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + "px";
+});
+
+// Enter to send, Shift+Enter for newline
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    formEl.requestSubmit();
+  }
+});
+
+async function loadStatus() {
+  try {
+    const [healthResp, modelsResp] = await Promise.all([
+      fetch("/health"),
+      fetch("/v1/models"),
+    ]);
+    const health = await healthResp.json();
+    const models = await modelsResp.json();
+    if (health.status === "ok") {
+      statusDot.className = "dot";
+      const modelId = models.data[0]?.id || "ravnest";
+      metaEl.textContent = modelId;
+    } else {
+      statusDot.className = "dot loading";
+      metaEl.textContent = "loading model...";
+      setTimeout(loadStatus, 2000);
+    }
+  } catch (e) {
+    statusDot.className = "dot error";
+    metaEl.textContent = "API unreachable";
+    setTimeout(loadStatus, 5000);
+  }
+}
+
+function addMessage(role, content) {
+  if (emptyEl) emptyEl.remove();
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  const roleEl = document.createElement("div");
+  roleEl.className = "role";
+  roleEl.textContent = role;
+  const contentEl = document.createElement("div");
+  contentEl.className = "content";
+  contentEl.textContent = content;
+  div.appendChild(roleEl);
+  div.appendChild(contentEl);
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return contentEl;
+}
+
+formEl.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  inputEl.value = "";
+  inputEl.style.height = "auto";
+  sendBtn.disabled = true;
+  inputEl.disabled = true;
+
+  conversation.push({ role: "user", content: text });
+  addMessage("user", text);
+
+  const assistantEl = addMessage("assistant", "");
+  assistantEl.classList.add("cursor");
+
+  try {
+    const resp = await fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "ravnest",
+        messages: conversation,
+        max_tokens: 256,
+        stream: true,
+      }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      assistantEl.textContent = "[Error: " + resp.status + " " + err + "]";
+      assistantEl.classList.remove("cursor");
+      conversation.pop(); // don't keep failed turns in history
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let assistantText = "";
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6);
+        if (payload === "[DONE]") continue;
+        try {
+          const chunk = JSON.parse(payload);
+          const delta = chunk.choices?.[0]?.delta?.content || "";
+          assistantText += delta;
+          assistantEl.textContent = assistantText;
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        } catch (err) {
+          // skip malformed chunks
+        }
+      }
+    }
+
+    assistantEl.classList.remove("cursor");
+    if (assistantText) {
+      conversation.push({ role: "assistant", content: assistantText });
+    }
+  } catch (err) {
+    assistantEl.textContent = "[Error: " + err.message + "]";
+    assistantEl.classList.remove("cursor");
+    conversation.pop();
+  } finally {
+    sendBtn.disabled = false;
+    inputEl.disabled = false;
+    inputEl.focus();
+  }
+});
+
+loadStatus();
+inputEl.focus();
+</script>
+
+</body>
+</html>
