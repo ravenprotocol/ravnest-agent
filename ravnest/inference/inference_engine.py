@@ -219,6 +219,11 @@ class InferenceEngine():
         num_generated_tokens = 0
         is_generation_done = torch.tensor([False]*bs).to(self.node.device)
         pad_token_tensor = torch.tensor([self.tokenizer.pad_token_id]*bs).to(self.node.device)
+        # Track generated token ids for incremental decoding (BPE/SentencePiece
+        # tokenizers lose leading-space info when decoded one token at a time,
+        # so we decode the running list and yield only the new substring)
+        generated_ids_so_far = []
+        decoded_so_far = ""
         while num_generated_tokens < max_seq_length_in_batch:
             self.comm_session.forward_input_shapes[0][1] = seq_length
 
@@ -261,10 +266,16 @@ class InferenceEngine():
                 new_token_mask = kwargs['attention_mask'].new_ones((bs,1))
                 kwargs['attention_mask'] = torch.cat((kwargs['attention_mask'], new_token_mask), axis=-1)
 
-            # Yield the decoded token for each sequence in the batch
+            # Yield the decoded token for each sequence in the batch.
+            # Decode the full running list and emit only the new substring,
+            # so BPE/SentencePiece leading spaces are preserved.
             if self.node_type != NodeTypes.LEAF:
-                token_text = self.tokenizer.decode(next_token_ids[0].item(), skip_special_tokens=True)
-                yield token_text
+                generated_ids_so_far.append(next_token_ids[0].item())
+                full_decoded = self.tokenizer.decode(generated_ids_so_far, skip_special_tokens=True)
+                if len(full_decoded) > len(decoded_so_far):
+                    delta = full_decoded[len(decoded_so_far):]
+                    decoded_so_far = full_decoded
+                    yield delta
 
             is_generation_done = self.is_generation_complete(is_generation_done, next_token_ids, num_generated_tokens, max_seq_lengths)
 

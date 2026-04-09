@@ -42,8 +42,8 @@ class TensorSocket:
 
     @staticmethod
     def recv_tensor(sock, device="cpu", timeout=300):
-        """Receive a tensor from a socket."""
-        sock.settimeout(timeout)
+        """Receive a tensor from a socket. Pass timeout=None to block indefinitely."""
+        sock.settimeout(timeout)  # None = blocking forever
         header = TensorSocket._recv_exactly(sock, 4)
         if header is None:
             raise ConnectionError("Connection closed while reading header")
@@ -420,8 +420,11 @@ class Communication_Dynamic:
                 if isinstance(key, str) and key.startswith("meta_"):
                     TensorSocket.send_tensor(sock, data)
         else:
-            # Receive from root
-            received = TensorSocket.recv_tensor(self.peers["meta_root"], device=str(self.device))
+            # Receive from root — block forever; user think-time between
+            # requests is unbounded so a fixed timeout isn't appropriate here
+            received = TensorSocket.recv_tensor(
+                self.peers["meta_root"], device=str(self.device), timeout=None
+            )
             data.copy_(received)
 
     def broadcast_metadata_objects(self, data):
@@ -430,7 +433,8 @@ class Communication_Dynamic:
                 if isinstance(key, str) and key.startswith("meta_"):
                     TensorSocket.send_object(sock, data)
         else:
-            received = TensorSocket.recv_object(self.peers["meta_root"])
+            # Block forever waiting for next prompt — user think-time is unbounded
+            received = TensorSocket.recv_object(self.peers["meta_root"], timeout=None)
             for i in range(len(data)):
                 if i < len(received):
                     data[i] = received[i]
