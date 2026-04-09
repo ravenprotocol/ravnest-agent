@@ -37,6 +37,7 @@ class SingleNodeEngine:
         max_new = max_seq_lengths[0] if max_seq_lengths else 128
 
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        prompt_len = inputs["input_ids"].shape[1]
         with torch.no_grad():
             output_ids = self.model.generate(
                 **inputs,
@@ -46,7 +47,11 @@ class SingleNodeEngine:
                 temperature=temperature if temperature > 0 else None,
                 pad_token_id=self.tokenizer.eos_token_id,
             )
-        text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        # Slice off the prompt tokens — string-based stripping is unreliable
+        # because chat-templated prompts don't byte-match after encode→decode
+        new_tokens = output_ids[0][prompt_len:]
+        text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+        # Return just the new generation (api server will not need to strip)
         return [text]
 
     def generate_stream(self, prompt_list=None, max_seq_lengths=None, top_k=1, temperature=1.0):
