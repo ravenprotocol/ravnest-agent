@@ -287,14 +287,11 @@ def create_app(engine, tokenizer):
                 max_seq_lengths=[request.max_tokens],
                 top_k=request.top_k,
                 temperature=request.temperature,
+                return_new_tokens_only=True,
             )
 
             elapsed = time.time() - start_time
-            generated_text = outputs[0] if outputs else ""
-
-            if generated_text.startswith(prompt):
-                generated_text = generated_text[len(prompt):]
-            generated_text = generated_text.strip()
+            generated_text = (outputs[0] if outputs else "").strip()
 
             completion_tokens = len(app.state.tokenizer.encode(generated_text))
 
@@ -370,10 +367,9 @@ def create_app(engine, tokenizer):
                 max_seq_lengths=[request.max_tokens],
                 top_k=request.top_k,
                 temperature=request.temperature,
+                return_new_tokens_only=True,
             )
             generated_text = outputs[0] if outputs else ""
-            if generated_text.startswith(prompt):
-                generated_text = generated_text[len(prompt):]
 
             completion_tokens = len(app.state.tokenizer.encode(generated_text))
 

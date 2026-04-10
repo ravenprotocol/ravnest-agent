@@ -309,12 +309,13 @@ class InferenceEngine():
             self.kv_cache_engine._block_tables_helper.fill_(-1)
         self.use_prefill = True
 
-    def generate(self, prompt_list=None, max_seq_lengths=None, top_k=1, temperature=1.0):
+    def generate(self, prompt_list=None, max_seq_lengths=None, top_k=1, temperature=1.0, return_new_tokens_only=False):
         self.reset_kv_cache()
         prompt_list = self.broadcast_prompt_list(prompt_list)
         tokenized_and_padded_batch, unpadded_seq_lengths = self.tokenize_and_pad_batch(prompt_list)
         print('Unpadded seq lengths: ', unpadded_seq_lengths)
         print('tokenized_and_padded_batch:', tokenized_and_padded_batch['input_ids'].shape, len(tokenized_and_padded_batch))
+        prompt_len = tokenized_and_padded_batch['input_ids'].shape[1]
         if self.use_prefill:
             self.kv_cache_engine.allocate_block_tables_for_batch(tokenized_and_padded_batch['input_ids'], unpadded_seq_lengths)
             self.k_caches, self.v_caches = self.kv_cache_engine.get_kv_caches()
@@ -325,5 +326,9 @@ class InferenceEngine():
                                         context_lengths=unpadded_seq_lengths)
 
         print('Generated tokens: ', generated_tokens.shape)
+        # Slice off the prompt tokens — string-based stripping is unreliable
+        # because chat-templated prompts don't byte-match after encode→decode
+        if return_new_tokens_only:
+            generated_tokens = generated_tokens[:, prompt_len:]
         return self.tokenizer_decode_batch(generated_tokens)
 

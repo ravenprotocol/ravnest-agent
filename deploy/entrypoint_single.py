@@ -30,7 +30,7 @@ class SingleNodeEngine:
         self.tokenizer = tokenizer
         self.device = device
 
-    def generate(self, prompt_list=None, max_seq_lengths=None, top_k=1, temperature=1.0):
+    def generate(self, prompt_list=None, max_seq_lengths=None, top_k=1, temperature=1.0, return_new_tokens_only=False):
         if not prompt_list:
             return [""]
         prompt = prompt_list[0]
