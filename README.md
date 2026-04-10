@@ -27,6 +27,13 @@ Ravnest introduces a novel asynchronous parallel training approach that combines
 - **KV Cache** with paged attention for memory-efficient generation
 - **Distributed Training** across heterogeneous consumer-grade PCs
 
+**Tested:** TinyLlama-1.1B end-to-end on a 4-node CPU pipeline (single
+machine, layers 0–5 / 5–11 / 11–17 / 17–22) with streaming, multi-turn
+chat, concurrent request queueing, and stem-node forwarding all
+verified. Baseline throughput on that config: ~1.5 tok/s — slow because
+4-way CPU split pays heavy inter-node overhead per token; single-node
+or GPU configs are several times faster.
+
 ![-----------------------------------------------------](https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/aqua.png)
 
 ### Quick Start
@@ -46,6 +53,7 @@ pip install --upgrade pip
 pip install -e '.[inference]'
 
 ravnest native                     # auto-detects MPS, starts 2 local nodes
+ravnest native --nodes 4           # split deeper across 4 local nodes
 ```
 
 Everything installs into `.venv/`. To remove: `rm -rf ravnest-agent`.
